@@ -1,5 +1,8 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <string.h>
+#include <stdlib.h>
+#include <cuda_runtime.h>
 
 #define CHECK(call)\
 {\
@@ -111,7 +114,40 @@ __global__ void blurImgKernel(uchar3 * inPixels, int width, int height,
 		uchar3 * outPixels)
 {
 	// TODO
-	
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
+	if (x >= width || y >= height) return;
+
+	int half = filterWidth / 2;
+	float sumR = 0.0f;
+	float sumG = 0.0f;
+	float sumB = 0.0f;
+
+	for (int fr = 0; fr < filterWidth; fr++)
+	{
+		for (int fc = 0; fc < filterWidth; fc++)
+		{
+			int imgR = y + fr - half;
+			int imgC = x + fc - half;
+
+			if (imgR < 0) imgR = 0;
+			if (imgR >= height) imgR = height - 1;
+			if (imgC < 0) imgC = 0;
+			if (imgC >= width) imgC = width - 1;
+
+			int idx = imgR * width + imgC;
+			float w = filter[fr * filterWidth + fc];
+
+			sumR += w * (float)inPixels[idx].x;
+			sumG += w * (float)inPixels[idx].y;
+			sumB += w * (float)inPixels[idx].z;
+		}
+	}
+
+	int outIdx = y * width + x;
+	outPixels[outIdx].x = (unsigned char)fminf(fmaxf(sumR, 0.0f), 255.0f);
+	outPixels[outIdx].y = (unsigned char)fminf(fmaxf(sumG, 0.0f), 255.0f);
+	outPixels[outIdx].z = (unsigned char)fminf(fmaxf(sumB, 0.0f), 255.0f);
 }
 
 void blurImg(uchar3 * inPixels, int width, int height, float * filter, int filterWidth, 
@@ -123,17 +159,93 @@ void blurImg(uchar3 * inPixels, int width, int height, float * filter, int filte
 	if (useDevice == false)
 	{
 		// TODO
+		int half = filterWidth / 2;
+		for (int y = 0; y < height; y++)
+		{
+			for (int x = 0; x < width; x++)
+			{
+				float sumR = 0.0f, sumG = 0.0f, sumB = 0.0f;
+				for (int fr = 0; fr < filterWidth; fr++)
+				{
+					for (int fc = 0; fc < filterWidth; fc++)
+					{
+						int imgR = y + fr - half;
+						int imgC = x + fc - half;
+						if (imgR < 0) imgR = 0;
+						if (imgR >= height) imgR = height - 1;
+						if (imgC < 0) imgC = 0;
+						if (imgC >= width) imgC = width - 1;
 
+						int idx = imgR * width + imgC;
+						float w = filter[fr * filterWidth + fc];
+						sumR += w * (float)inPixels[idx].x;
+						sumG += w * (float)inPixels[idx].y;
+						sumB += w * (float)inPixels[idx].z;
+					}
+				}
+				int outIdx = y * width + x;
+				outPixels[outIdx].x = (unsigned char)fminf(fmaxf(sumR, 0.0f), 255.0f);
+				outPixels[outIdx].y = (unsigned char)fminf(fmaxf(sumG, 0.0f), 255.0f);
+				outPixels[outIdx].z = (unsigned char)fminf(fmaxf(sumB, 0.0f), 255.0f);
+			}
+		}
 	}
 	else // Use device
 	{
 		cudaDeviceProp devProp;
-		cudaGetDeviceProperties(&devProp, 0);
+		
+		CHECK(cudaGetDeviceProperties(&devProp, 0));
 		printf("GPU name: %s\n", devProp.name);
 		printf("GPU compute capability: %d.%d\n", devProp.major, devProp.minor);
+		int maxThreadsPerBlock = devProp.maxThreadsPerBlock;
+		int maxBlockDimX = devProp.maxThreadsDim[0];
+		int maxBlockDimY = devProp.maxThreadsDim[1];
+
+
+		if (blockSize.x <= 0 || blockSize.y <= 0)
+		{
+			fprintf(stderr, "Error: block size must be positive (got %d, %d)\n",
+					blockSize.x, blockSize.y);
+			exit(EXIT_FAILURE);
+		}
+
+		if (blockSize.x > maxBlockDimX || blockSize.y > maxBlockDimY)
+		{
+			fprintf(stderr, "Error: block size (%d, %d) exceeds device limit (%d, %d)\n",
+					blockSize.x, blockSize.y, maxBlockDimX, maxBlockDimY);
+			exit(EXIT_FAILURE);
+		}
+
+		if (blockSize.x * blockSize.y > maxThreadsPerBlock)
+		{
+			fprintf(stderr, "Error: total threads per block (%d) exceeds maxThreadsPerBlock (%d)\n",
+					blockSize.x * blockSize.y, maxThreadsPerBlock);
+			exit(EXIT_FAILURE);
+		}
+		printf("Block: %d x %d, filterWidth=%d\n", blockSize.x, blockSize.y, filterWidth);
 
 		// TODO
+		uchar3 *d_in, *d_out;
+		float *d_filter;
+		size_t imgSize = (size_t)width * height * sizeof(uchar3);
+		size_t filterSize = (size_t)filterWidth * filterWidth * sizeof(float);
 
+		CHECK(cudaMalloc(&d_in, imgSize));
+		CHECK(cudaMalloc(&d_out, imgSize));
+		CHECK(cudaMalloc(&d_filter, filterSize));
+
+		CHECK(cudaMemcpy(d_in, inPixels, imgSize, cudaMemcpyHostToDevice));
+		CHECK(cudaMemcpy(d_filter, filter, filterSize, cudaMemcpyHostToDevice));
+
+		dim3 grid((width + blockSize.x - 1) / blockSize.x,
+				  (height + blockSize.y - 1) / blockSize.y);
+		blurImgKernel<<<grid, blockSize>>>(d_in, width, height, d_filter, filterWidth, d_out);
+		CHECK(cudaDeviceSynchronize());
+		CHECK(cudaMemcpy(outPixels, d_out, imgSize, cudaMemcpyDeviceToHost));
+
+		CHECK(cudaFree(d_in));
+		CHECK(cudaFree(d_out));
+		CHECK(cudaFree(d_filter));
 	}
 	timer.Stop();
 	float time = timer.Elapsed();
@@ -164,7 +276,7 @@ char * concatStr(const char * s1, const char * s2)
 
 int main(int argc, char ** argv)
 {
-	if (argc != 4 && argc != 6)
+	if (argc != 4 && argc != 5 && argc != 6 && argc != 7)
 	{
 		printf("The number of arguments is invalid\n");
 		return EXIT_FAILURE;
@@ -186,14 +298,36 @@ int main(int argc, char ** argv)
 		return EXIT_FAILURE;
 	}
 
-	// Set up a simple filter with blurring effect 
-	int filterWidth = 9;
-	float * filter = (float *)malloc(filterWidth * filterWidth * sizeof(float));
-	for (int filterR = 0; filterR < filterWidth; filterR++)
+	// Filter setup
+	int filterWidth;
+	float *filter = NULL;
+
+	if (argc >= 5 && strstr(argv[4], ".txt") != NULL) // Có truyền file filter
 	{
-		for (int filterC = 0; filterC < filterWidth; filterC++)
+		FILE *f = fopen(argv[4], "r");
+		if (f == NULL)
 		{
-			filter[filterR * filterWidth + filterC] = 1. / (filterWidth * filterWidth);
+			printf("Cannot open filter file %s\n", argv[4]);
+			return EXIT_FAILURE;
+		}
+
+		fscanf(f, "%d", &filterWidth);
+		filter = (float *)malloc(filterWidth * filterWidth * sizeof(float));
+		for (int i = 0; i < filterWidth * filterWidth; i++)
+			fscanf(f, "%f", &filter[i]);
+		fclose(f);
+	}
+	else
+	{
+		//  default blur filter
+		filterWidth = 9;
+		filter = (float *)malloc(filterWidth * filterWidth * sizeof(float));
+		for (int r = 0; r < filterWidth; r++)
+		{
+			for (int c = 0; c < filterWidth; c++)
+			{
+				filter[r * filterWidth + c] = 1.0f / (filterWidth * filterWidth);
+			}
 		}
 	}
 
@@ -208,16 +342,28 @@ int main(int argc, char ** argv)
 	// Blur input image using device
 	uchar3 * deviceOutPixels = (uchar3 *)malloc(width * height * sizeof(uchar3));
 	dim3 blockSize(32, 32); // Default
-	if (argc == 6)
+
+	if (argc == 6 && strstr(argv[4], ".txt") == NULL)
 	{
 		blockSize.x = atoi(argv[4]);
 		blockSize.y = atoi(argv[5]);
-	}  
+	}
+	else if (argc == 7)
+	{
+		blockSize.x = atoi(argv[5]);
+		blockSize.y = atoi(argv[6]);
+	}
+
+
 	blurImg(inPixels, width, height, filter, filterWidth, deviceOutPixels, true, blockSize);
 
 	// Compute mean absolute error between device result and correct result
 	float deviceErr = computeError(deviceOutPixels, correctOutPixels, width * height);
 	printf("Error: %f\n\n", deviceErr);
+
+	// Compute mean absolute error between device result and host result
+	float hostDeviceErr = computeError(hostOutPixels, deviceOutPixels, width * height);
+	printf("Error between host and device: %f\n\n", hostDeviceErr);
 
 	// Write results to files
 	char * outFileNameBase = strtok(argv[2], "."); // Get rid of extension

@@ -126,7 +126,16 @@ __global__ void convertRgb2GrayKernel(uint8_t * inPixels, int width, int height,
 {
 	// TODO
     // Reminder: gray = 0.299*red + 0.587*green + 0.114*blue  
-
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
+	if (x >= width || y >= height) return;
+	int idx = y * width + x;
+	int inIdx = idx * 3;
+	uint8_t r = inPixels[inIdx + 0];
+	uint8_t g = inPixels[inIdx + 1];
+	uint8_t b = inPixels[inIdx + 2];
+	float grayf = 0.299f * (float)r + 0.587f * (float)g + 0.114f * (float)b;
+	outPixels[idx] = (uint8_t)(grayf);
 }
 
 void convertRgb2Gray(uint8_t * inPixels, int width, int height,
@@ -139,7 +148,19 @@ void convertRgb2Gray(uint8_t * inPixels, int width, int height,
 	{
 		// TODO
         // Reminder: gray = 0.299*red + 0.587*green + 0.114*blue  
-
+		for (int y = 0; y < height; ++y)
+		{
+			for (int x = 0; x < width; ++x)
+			{
+				int idx = y * width + x;
+				int inIdx = idx * 3;
+				uint8_t r = inPixels[inIdx + 0];
+				uint8_t g = inPixels[inIdx + 1];
+				uint8_t b = inPixels[inIdx + 2];
+				float grayf = 0.299f * (float)r + 0.587f * (float)g + 0.114f * (float)b;
+				outPixels[idx] = (uint8_t)(grayf);
+			}
+		}
 	}
 	else // use device
 	{
@@ -149,15 +170,53 @@ void convertRgb2Gray(uint8_t * inPixels, int width, int height,
 		printf("GPU compute capability: %d.%d\n", devProp.major, devProp.minor);
 
 		// TODO: Allocate device memories
+		uint8_t *d_in = nullptr;
+		uint8_t *d_out = nullptr;
+		size_t inSize = (size_t)width * height * 3;
+		size_t outSize = (size_t)width * height;
+		CHECK(cudaMalloc(&d_in, inSize));
+		CHECK(cudaMalloc(&d_out, outSize));
 
 		// TODO: Copy data to device memories
+		CHECK(cudaMemcpy(d_in, inPixels, inSize, cudaMemcpyHostToDevice));
 
 		// TODO: Set grid size and call kernel (remember to check kernel error)
+		int maxThreadsPerBlock = devProp.maxThreadsPerBlock;
+		int maxBlockDimX = devProp.maxThreadsDim[0];
+		int maxBlockDimY = devProp.maxThreadsDim[1];
+		if (blockSize.x <= 0 || blockSize.y <= 0)
+        {
+            fprintf(stderr, "Error: block size must be positive (got %d, %d)\n",
+                    blockSize.x, blockSize.y);
+            exit(EXIT_FAILURE);
+        }
+
+        if (blockSize.x > maxBlockDimX || blockSize.y > maxBlockDimY)
+        {
+            fprintf(stderr, "Error: block size (%d, %d) exceeds device limit (%d, %d)\n",
+                    blockSize.x, blockSize.y, maxBlockDimX, maxBlockDimY);
+            exit(EXIT_FAILURE);
+        }
+
+        if (blockSize.x * blockSize.y > maxThreadsPerBlock)
+        {
+            fprintf(stderr, "Error: total threads per block (%d) exceeds maxThreadsPerBlock (%d)\n",
+                    blockSize.x * blockSize.y, maxThreadsPerBlock);
+            exit(EXIT_FAILURE);
+        }
+		
+		dim3 grid((width + blockSize.x - 1) / blockSize.x,
+				  (height + blockSize.y - 1) / blockSize.y);
+		convertRgb2GrayKernel<<<grid, blockSize>>>(d_in, width, height, d_out);
+		CHECK(cudaGetLastError());
+		CHECK(cudaDeviceSynchronize());
 
 		// TODO: Copy result from device memories
+		CHECK(cudaMemcpy(outPixels, d_out, outSize, cudaMemcpyDeviceToHost));
 
 		// TODO: Free device memories
-
+		CHECK(cudaFree(d_in));
+		CHECK(cudaFree(d_out));
 	}
 	timer.Stop();
 	float time = timer.Elapsed();
@@ -220,6 +279,7 @@ int main(int argc, char ** argv)
 	char * outFileNameBase = strtok(argv[2], "."); // Get rid of extension
 	writePnm(correctOutPixels, 1, width, height, concatStr(outFileNameBase, "_host.pnm"));
 	writePnm(outPixels, 1, width, height, concatStr(outFileNameBase, "_device.pnm"));
+	printf("Output file: %s, %s", concatStr(outFileNameBase, "_host.pnm"), concatStr(outFileNameBase, "_device.pnm") );
 
 	// Free memories
 	free(inPixels);
