@@ -113,41 +113,37 @@ __global__ void blurImgKernel1(uchar3 * inPixels, int width, int height,
         uchar3 * outPixels)
 {
 	// TODO
-	int x = blockIdx.x * blockDim.x + threadIdx.x;
-	int y = blockIdx.y * blockDim.y + threadIdx.y;
-	if (x >= width || y >= height) return;
+    int r = blockIdx.y * blockDim.y + threadIdx.y;
+    int c = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    // Check valid row and column
+    if (r >= height || c >= width)
+        return;
 
-	int half = filterWidth / 2;
-	float sumR = 0.0f;
-	float sumG = 0.0f;
-	float sumB = 0.0f;
+    int idx = r * width + c;
 
-	for (int fr = 0; fr < filterWidth; fr++)
-	{
-		for (int fc = 0; fc < filterWidth; fc++)
-		{
-			int imgR = y + fr - half;
-			int imgC = x + fc - half;
+    float3 result = {0, 0, 0};
 
-			if (imgR < 0) imgR = 0;
-			if (imgR >= height) imgR = height - 1;
-			if (imgC < 0) imgC = 0;
-			if (imgC >= width) imgC = width - 1;
+    for (int fr = 0; fr < filterWidth; fr++)
+        for (int fc = 0; fc < filterWidth; fc++)
+        {
+            float filterVal = filter[fr * filterWidth + fc];
 
-			int idx = imgR * width + imgC;
-			float w = filter[fr * filterWidth + fc];
+            int pixelR = min(max(r + fr - filterWidth/2, 0), height - 1);
+            int pixelC = min(max(c + fc - filterWidth/2, 0), width - 1);
 
-			sumR += w * (float)inPixels[idx].x;
-			sumG += w * (float)inPixels[idx].y;
-			sumB += w * (float)inPixels[idx].z;
-		}
-	}
+            int _idx = pixelR * width + pixelC;
+            float3 pixelVal = make_float3(inPixels[_idx].x, 
+                            inPixels[_idx].y,
+                            inPixels[_idx].z);
 
-	int outIdx = y * width + x;
-	outPixels[outIdx].x = (unsigned char)fminf(fmaxf(sumR, 0.0f), 255.0f);
-	outPixels[outIdx].y = (unsigned char)fminf(fmaxf(sumG, 0.0f), 255.0f);
-	outPixels[outIdx].z = (unsigned char)fminf(fmaxf(sumB, 0.0f), 255.0f);
-
+            result.x += pixelVal.x * filterVal;
+            result.y += pixelVal.y * filterVal;
+            result.z += pixelVal.z * filterVal;
+        }
+    outPixels[idx].x = (unsigned char)min(max(result.x, 0.0f), 255.0f);
+    outPixels[idx].y = (unsigned char)min(max(result.y, 0.0f), 255.0f);
+    outPixels[idx].z = (unsigned char)min(max(result.z, 0.0f), 255.0f);
 }
 
 __global__ void blurImgKernel2(uchar3 * inPixels, int width, int height, 
@@ -155,78 +151,76 @@ __global__ void blurImgKernel2(uchar3 * inPixels, int width, int height,
         uchar3 * outPixels)
 {
 	// TODO
-	int r = blockIdx.y * blockDim.y + threadIdx.y;
-	int c = blockIdx.x * blockDim.x + threadIdx.x;
+    int r = blockIdx.y * blockDim.y + threadIdx.y;
+    int c = blockIdx.x * blockDim.x + threadIdx.x;
+    
+ 
 
 	extern __shared__ uchar3 s_inPixels[];
 
-	int R = filterWidth / 2;
-	int smemW = blockDim.x + 2 * R;
-	// int smemH = blockDim.y + 2 * R;
+	int filterR = filterWidth / 2;
+	int smemWidth = blockDim.x + 2 * filterR;
 
-	int tileR = r - R;
-	int tileC = c - R;
+	int tileR = r - filterR;
+	int tileC = c - filterR;
 
-	int smemR = threadIdx.y;
-	int smemC = threadIdx.x;
-
-	int imgR = min(max(tileR, 0), height - 1);
-	int imgC = min(max(tileC, 0), width - 1);
-
-	s_inPixels[smemR * smemW + smemC] =
-		inPixels[imgR * width + imgC];
-
-	if (threadIdx.x < 2 * R) {
-		int imgC2 = tileC + blockDim.x;
-		int smemC2 = smemC + blockDim.x;
-		imgC2 = min(max(imgC2, 0), width - 1);
-		s_inPixels[smemR * smemW + smemC2] =
-			inPixels[imgR * width + imgC2];
-	}
-
-	if (threadIdx.y < 2 * R) {
-		int imgR2 = tileR + blockDim.y;
-		int smemR2 = smemR + blockDim.y;
-		imgR2 = min(max(imgR2, 0), height - 1);
-		s_inPixels[smemR2 * smemW + smemC] =
-			inPixels[imgR2 * width + imgC];
-	}
-
-	if (threadIdx.x < 2 * R && threadIdx.y < 2 * R) {
-		int imgR2 = tileR + blockDim.y;
-		int imgC2 = tileC + blockDim.x;
-		imgR2 = min(max(imgR2, 0), height - 1);
-		imgC2 = min(max(imgC2, 0), width - 1);
-
-		int smemR2 = smemR + blockDim.y;
-		int smemC2 = smemC + blockDim.x;
-
-		s_inPixels[smemR2 * smemW + smemC2] =
-			inPixels[imgR2 * width + imgC2];
-	}
-
+	s_inPixels[threadIdx.y * smemWidth + threadIdx.x] = 
+		inPixels[min(max(tileR, 0), height - 1) * width + min(max(tileC, 0), width - 1)];
 	__syncthreads();
 
-	if (r >= height || c >= width) return;
+	if (threadIdx.x < 2 * filterR)
+	{
+		int smemC = threadIdx.x + blockDim.x;
+		int imgC = tileC + blockDim.x;
+		s_inPixels[threadIdx.y * smemWidth + smemC] = 
+			inPixels[min(max(tileR, 0), height - 1) * width + min(max(imgC, 0), width - 1)];
+	}
+	if (threadIdx.y < 2 * filterR)
+	{
+		int smemR = threadIdx.y + blockDim.y;
+		int imgR = tileR + blockDim.y;
+		s_inPixels[smemR * smemWidth + threadIdx.x] = 
+			inPixels[min(max(imgR, 0), height - 1) * width + min(max(tileC, 0), width - 1)];
+	}
+	if (threadIdx.x < 2 * filterR && threadIdx.y < 2 * filterR)
+	{
+		int smemR = threadIdx.y + blockDim.y;
+		int smemC = threadIdx.x + blockDim.x;
+		int imgR = tileR + blockDim.y;
+		int imgC = tileC + blockDim.x;
+		s_inPixels[smemR * smemWidth + smemC] = 
+			inPixels[min(max(imgR, 0), height - 1) * width + min(max(imgC, 0), width - 1)];
+	}
+	__syncthreads();
 
-	int outIdx = r * width + c;
-	float3 acc = {0,0,0};
+   // Check valid row and column
+    if (r >= height || c >= width)
+        return;
+
+	int idx = r * width + c;
+	float3 result = {0, 0, 0};
 
 	for (int fr = 0; fr < filterWidth; fr++)
-		for (int fc = 0; fc < filterWidth; fc++) {
-			float w = filter[fr * filterWidth + fc];
-			int sr = smemR + fr;
-			int sc = smemC + fc;
-			uchar3 p = s_inPixels[sr * smemW + sc];
+		for (int fc = 0; fc < filterWidth; fc++)
+		{
+			float filterVal = filter[fr * filterWidth + fc];
 
-			acc.x += p.x * w;
-			acc.y += p.y * w;
-			acc.z += p.z * w;
+			int smemR = threadIdx.y + fr;
+			int smemC = threadIdx.x + fc;
+
+			float3 pixelVal = make_float3(
+				s_inPixels[smemR * smemWidth + smemC].x, 
+				s_inPixels[smemR * smemWidth + smemC].y,
+				s_inPixels[smemR * smemWidth + smemC].z
+			);
+
+			result.x += pixelVal.x * filterVal;
+			result.y += pixelVal.y * filterVal;
+			result.z += pixelVal.z * filterVal;
 		}
-
-	outPixels[outIdx].x = (unsigned char)min(max(acc.x, 0.0f), 255.0f);
-	outPixels[outIdx].y = (unsigned char)min(max(acc.y, 0.0f), 255.0f);
-	outPixels[outIdx].z = (unsigned char)min(max(acc.z, 0.0f), 255.0f);
+	outPixels[idx].x = (unsigned char)min(max(result.x, 0.0f), 255.0f);
+	outPixels[idx].y = (unsigned char)min(max(result.y, 0.0f), 255.0f);
+	outPixels[idx].z = (unsigned char)min(max(result.z, 0.0f), 255.0f);
 }
 
 __global__ void blurImgKernel3(uchar3 * inPixels, int width, int height, 
@@ -234,77 +228,74 @@ __global__ void blurImgKernel3(uchar3 * inPixels, int width, int height,
         uchar3 * outPixels)
 {
 	// TODO
-	int r = blockIdx.y * blockDim.y + threadIdx.y;
-	int c = blockIdx.x * blockDim.x + threadIdx.x;
+    int r = blockIdx.y * blockDim.y + threadIdx.y;
+    int c = blockIdx.x * blockDim.x + threadIdx.x;
 
 	extern __shared__ uchar3 s_inPixels[];
 
-	int R = filterWidth / 2;
-	int smemW = blockDim.x + 2 * R;
+	int filterR = filterWidth / 2;
+	int smemWidth = blockDim.x + 2 * filterR;
 
-	int tileR = r - R;
-	int tileC = c - R;
+	int tileR = r - filterR;
+	int tileC = c - filterR;
 
-	int smemR = threadIdx.y;
-	int smemC = threadIdx.x;
-
-	int imgR = min(max(tileR, 0), height - 1);
-	int imgC = min(max(tileC, 0), width - 1);
-
-	s_inPixels[smemR * smemW + smemC] =
-		inPixels[imgR * width + imgC];
-
-	if (threadIdx.x < 2 * R) {
-		int imgC2 = tileC + blockDim.x;
-		int smemC2 = smemC + blockDim.x;
-		imgC2 = min(max(imgC2, 0), width - 1);
-		s_inPixels[smemR * smemW + smemC2] =
-			inPixels[imgR * width + imgC2];
-	}
-
-	if (threadIdx.y < 2 * R) {
-		int imgR2 = tileR + blockDim.y;
-		int smemR2 = smemR + blockDim.y;
-		imgR2 = min(max(imgR2, 0), height - 1);
-		s_inPixels[smemR2 * smemW + smemC] =
-			inPixels[imgR2 * width + imgC];
-	}
-
-	if (threadIdx.x < 2 * R && threadIdx.y < 2 * R) {
-		int imgR2 = tileR + blockDim.y;
-		int imgC2 = tileC + blockDim.x;
-		imgR2 = min(max(imgR2, 0), height - 1);
-		imgC2 = min(max(imgC2, 0), width - 1);
-
-		int smemR2 = smemR + blockDim.y;
-		int smemC2 = smemC + blockDim.x;
-
-		s_inPixels[smemR2 * smemW + smemC2] =
-			inPixels[imgR2 * width + imgC2];
-	}
-
+	s_inPixels[threadIdx.y * smemWidth + threadIdx.x] = 
+		inPixels[min(max(tileR, 0), height - 1) * width + min(max(tileC, 0), width - 1)];
 	__syncthreads();
 
-	if (r >= height || c >= width) return;
+	if (threadIdx.x < 2 * filterR)
+	{
+		int smemC = threadIdx.x + blockDim.x;
+		int imgC = tileC + blockDim.x;
+		s_inPixels[threadIdx.y * smemWidth + smemC] = 
+			inPixels[min(max(tileR, 0), height - 1) * width + min(max(imgC, 0), width - 1)];
+	}
+	if (threadIdx.y < 2 * filterR)
+	{
+		int smemR = threadIdx.y + blockDim.y;
+		int imgR = tileR + blockDim.y;
+		s_inPixels[smemR * smemWidth + threadIdx.x] = 
+			inPixels[min(max(imgR, 0), height - 1) * width + min(max(tileC, 0), width - 1)];
+	}
+	if (threadIdx.x < 2 * filterR && threadIdx.y < 2 * filterR)
+	{
+		int smemR = threadIdx.y + blockDim.y;
+		int smemC = threadIdx.x + blockDim.x;
+		int imgR = tileR + blockDim.y;
+		int imgC = tileC + blockDim.x;
+		s_inPixels[smemR * smemWidth + smemC] = 
+			inPixels[min(max(imgR, 0), height - 1) * width + min(max(imgC, 0), width - 1)];
+	}
+	__syncthreads();
 
-	int outIdx = r * width + c;
-	float3 acc = {0,0,0};
+    // Check valid row and column
+    if (r >= height || c >= width)
+        return;
+
+	int idx = r * width + c;
+	float3 result = {0, 0, 0};
 
 	for (int fr = 0; fr < filterWidth; fr++)
-		for (int fc = 0; fc < filterWidth; fc++) {
-			float w = dc_filter[fr * filterWidth + fc];
-			int sr = smemR + fr;
-			int sc = smemC + fc;
-			uchar3 p = s_inPixels[sr * smemW + sc];
+		for (int fc = 0; fc < filterWidth; fc++)
+		{
+			float filterVal = dc_filter[fr * filterWidth + fc];
 
-			acc.x += p.x * w;
-			acc.y += p.y * w;
-			acc.z += p.z * w;
+			int smemR = threadIdx.y + fr;
+			int smemC = threadIdx.x + fc;
+
+			float3 pixelVal = make_float3(
+				s_inPixels[smemR * smemWidth + smemC].x, 
+				s_inPixels[smemR * smemWidth + smemC].y,
+				s_inPixels[smemR * smemWidth + smemC].z
+			);
+
+			result.x += pixelVal.x * filterVal;
+			result.y += pixelVal.y * filterVal;
+			result.z += pixelVal.z * filterVal;
 		}
-
-	outPixels[outIdx].x = (unsigned char)min(max(acc.x, 0.0f), 255.0f);
-	outPixels[outIdx].y = (unsigned char)min(max(acc.y, 0.0f), 255.0f);
-	outPixels[outIdx].z = (unsigned char)min(max(acc.z, 0.0f), 255.0f);
+	outPixels[idx].x = (unsigned char)min(max(result.x, 0.0f), 255.0f);
+	outPixels[idx].y = (unsigned char)min(max(result.y, 0.0f), 255.0f);
+	outPixels[idx].z = (unsigned char)min(max(result.z, 0.0f), 255.0f);
 }							
 
 void blurImg(uchar3 * inPixels, int width, int height, float * filter, int filterWidth, 
@@ -314,7 +305,7 @@ void blurImg(uchar3 * inPixels, int width, int height, float * filter, int filte
 	if (useDevice == false)
 	{
 		//TODO
-		for (int r = 0; r < height; r++)
+        for (int r = 0; r < height; r++)
             for (int c = 0; c < width; c++)
             {
                 int idx = r * width + c;
@@ -371,8 +362,7 @@ void blurImg(uchar3 * inPixels, int width, int height, float * filter, int filte
 		else
 		{
 			// TODO: copy data from "filter" (on host) to "dc_filter" (on CMEM of device)
-			CHECK(cudaMemcpyToSymbol(dc_filter, filter, filterSize));
-
+            cudaMemcpyToSymbol(dc_filter, filter, filterSize);
 		}
 
 		// Call kernel
@@ -382,27 +372,24 @@ void blurImg(uchar3 * inPixels, int width, int height, float * filter, int filte
 		if (kernelType == 1)
 		{
 			// TODO: call blurImgKernel1
-			blurImgKernel1<<<gridSize, blockSize>>>(d_inPixels, width, height, d_filter, filterWidth, d_outPixels);
+            blurImgKernel1<<<gridSize, blockSize>>>(d_inPixels, width, height, d_filter, filterWidth, d_outPixels);
 
 		}
 		else if (kernelType == 2)
 		{
 			// TODO: call blurImgKernel2
-			size_t smemSize = (blockSize.x + 2 * (filterWidth / 2)) *
-                  (blockSize.y + 2 * (filterWidth / 2)) *
-                  sizeof(uchar3);
-
-			blurImgKernel2<<<gridSize, blockSize, smemSize>>>(d_inPixels, width, height, d_filter, filterWidth, d_outPixels);
+			int sharedMemSize = (blockSize.x + 2 * (filterWidth / 2)) * 
+								(blockSize.y + 2 * (filterWidth / 2)) * 
+								sizeof(uchar3);
+            blurImgKernel2<<<gridSize, blockSize, sharedMemSize>>>(d_inPixels, width, height, d_filter, filterWidth, d_outPixels);
 		}
 		else
 		{
 			// TODO: call blurImgKernel3
-			size_t smemSize = (blockSize.x + 2 * (filterWidth / 2)) *
-                  (blockSize.y + 2 * (filterWidth / 2)) *
-                  sizeof(uchar3);
-
-			blurImgKernel3<<<gridSize, blockSize, smemSize>>>(d_inPixels, width, height, filterWidth, d_outPixels);
-
+			int sharedMemSize = (blockSize.x + 2 * (filterWidth / 2)) * 
+								(blockSize.y + 2 * (filterWidth / 2)) * 
+								sizeof(uchar3);
+            blurImgKernel3<<<gridSize, blockSize, sharedMemSize>>>(d_inPixels, width, height, filterWidth, d_outPixels);
 		}
 		timer.Stop();
 		float time = timer.Elapsed();
@@ -471,7 +458,7 @@ void printDeviceInfo()
 
 int main(int argc, char ** argv)
 {
-	if (argc !=3 && argc != 5)
+	if (argc !=3 && argc != 5 && argc != 6)
 	{
 		printf("The number of arguments is invalid\n");
 		return EXIT_FAILURE;
@@ -488,13 +475,37 @@ int main(int argc, char ** argv)
 	// Set up a simple filter with blurring effect 
 	int filterWidth = FILTER_WIDTH;
 	float * filter = (float *)malloc(filterWidth * filterWidth * sizeof(float));
-	for (int filterR = 0; filterR < filterWidth; filterR++)
+
+	const char * filterType = "blur";
+	if (argc == 6) filterType = argv[5];
+
+	if (strcmp(filterType, "blur") == 0)
 	{
-		for (int filterC = 0; filterC < filterWidth; filterC++)
+		for (int filterR = 0; filterR < filterWidth; filterR++)
 		{
-			filter[filterR * filterWidth + filterC] = 1. / (filterWidth * filterWidth);
+			for (int filterC = 0; filterC < filterWidth; filterC++)
+			{
+				filter[filterR * filterWidth + filterC] = 1. / (filterWidth * filterWidth);
+			}
 		}
 	}
+	else if (strcmp(filterType, "sharpen") == 0)
+	{
+    // alpha: độ sắc (1.0 = nhẹ, 2.0 = mạnh)
+        float alpha = 1.0;
+		float blurVal = - alpha / (filterWidth * filterWidth);
+		for (int i = 0; i < filterWidth * filterWidth; i++)
+			filter[i] = blurVal;
+
+		// Thêm impulse (điểm giữa)
+		int center = (filterWidth / 2) * filterWidth + (filterWidth / 2);
+		filter[center] += (1.0f + alpha);
+	}
+    else
+    {
+        
+    }
+
 
 	// Blur input image not using device
 	uchar3 * correctOutPixels = (uchar3 *)malloc(width * height * sizeof(uchar3)); 
