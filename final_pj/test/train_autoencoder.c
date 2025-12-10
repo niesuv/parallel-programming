@@ -8,8 +8,9 @@
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s <path_to_cifar10_data> [--epochs N] [--batch-size N] [--lr LR]\n", argv[0]);
+        fprintf(stderr, "Usage: %s <path_to_cifar10_data> [--epochs N] [--batch-size N] [--lr LR] [--num-samples N]\n", argv[0]);
         fprintf(stderr, "Example: %s ./cifar-10-batches-bin --epochs 20 --batch-size 32 --lr 0.001\n", argv[0]);
+        fprintf(stderr, "Quick test: %s ./cifar-10-batches-bin --epochs 2 --num-samples 1000\n", argv[0]);
         return 1;
     }
 
@@ -19,6 +20,8 @@ int main(int argc, char** argv) {
     int num_epochs = 20;
     int batch_size = 32;
     float learning_rate = 0.001f;
+    int max_train_samples = -1;  // -1 means use all samples
+    int max_test_samples = -1;
 
     // Parse arguments
     for (int i = 2; i < argc; i++) {
@@ -28,6 +31,9 @@ int main(int argc, char** argv) {
             batch_size = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--lr") == 0 && i + 1 < argc) {
             learning_rate = atof(argv[++i]);
+        } else if (strcmp(argv[i], "--num-samples") == 0 && i + 1 < argc) {
+            max_train_samples = atoi(argv[++i]);
+            max_test_samples = max_train_samples / 5;  // 20% for test
         }
     }
 
@@ -65,6 +71,22 @@ int main(int argc, char** argv) {
     timer_stop(timer);
     result->data_loading_time = timer_elapsed(timer);
 
+    // Limit number of samples if requested
+    int actual_train_samples = train_data->num_images;
+    int actual_test_samples = test_data->num_images;
+
+    if (max_train_samples > 0 && max_train_samples < train_data->num_images) {
+        actual_train_samples = max_train_samples;
+        printf("\n⚠️  Using only %d training samples (out of %d) for quick testing\n",
+               actual_train_samples, train_data->num_images);
+    }
+
+    if (max_test_samples > 0 && max_test_samples < test_data->num_images) {
+        actual_test_samples = max_test_samples;
+        printf("⚠️  Using only %d test samples (out of %d) for quick testing\n",
+               actual_test_samples, test_data->num_images);
+    }
+
     printf("\n✓ Data loaded successfully in %.2f seconds\n", result->data_loading_time);
     cifar10_print_dataset_info(train_data);
 
@@ -75,10 +97,12 @@ int main(int argc, char** argv) {
     printf("═══════════════════════════════════════════════════════════\n\n");
 
     printf("Hyperparameters:\n");
-    printf("  Batch size:      %d\n", batch_size);
-    printf("  Learning rate:   %.6f\n", learning_rate);
-    printf("  Epochs:          %d\n", num_epochs);
-    printf("  Device:          CPU\n\n");
+    printf("  Training samples: %d\n", actual_train_samples);
+    printf("  Test samples:     %d\n", actual_test_samples);
+    printf("  Batch size:       %d\n", batch_size);
+    printf("  Learning rate:    %.6f\n", learning_rate);
+    printf("  Epochs:           %d\n", num_epochs);
+    printf("  Device:           CPU\n\n");
 
     Autoencoder* ae = autoencoder_create(learning_rate, batch_size, num_epochs, DEVICE_CPU);
     if (!ae) {
@@ -96,8 +120,8 @@ int main(int argc, char** argv) {
     printf(" STEP 3: Training Autoencoder (Unsupervised)\n");
     printf("═══════════════════════════════════════════════════════════\n\n");
 
-    printf("Training on all 50,000 images (labels ignored)...\n");
-    printf("Total batches per epoch: %d\n\n", (train_data->num_images + batch_size - 1) / batch_size);
+    printf("Training on %d images (labels ignored)...\n", actual_train_samples);
+    printf("Total batches per epoch: %d\n\n", (actual_train_samples + batch_size - 1) / batch_size);
 
     timer_reset(timer);
     timer_start(timer);
@@ -109,14 +133,14 @@ int main(int argc, char** argv) {
         Timer* epoch_timer = timer_create();
         timer_start(epoch_timer);
 
-        float epoch_loss = autoencoder_train_epoch(ae, train_data->data, train_data->num_images, 1);
+        float epoch_loss = autoencoder_train_epoch(ae, train_data->data, actual_train_samples, 1);
 
         timer_stop(epoch_timer);
         double epoch_time = timer_elapsed(epoch_timer);
         timer_free(epoch_timer);
 
         printf("\n  Loss: %.6f | Time: %.2f s | Throughput: %.1f imgs/s\n",
-               epoch_loss, epoch_time, train_data->num_images / epoch_time);
+               epoch_loss, epoch_time, actual_train_samples / epoch_time);
 
         if (epoch_loss < best_loss) {
             best_loss = epoch_loss;
@@ -155,14 +179,14 @@ int main(int argc, char** argv) {
     timer_start(timer);
 
     // Test on test set (in batches)
-    int test_batches = (test_data->num_images + batch_size - 1) / batch_size;
+    int test_batches = (actual_test_samples + batch_size - 1) / batch_size;
     float total_test_loss = 0.0f;
 
-    printf("Testing on %d images...\n", test_data->num_images);
+    printf("Testing on %d images...\n", actual_test_samples);
     for (int batch_idx = 0; batch_idx < test_batches; batch_idx++) {
         int start_idx = batch_idx * batch_size;
         int end_idx = start_idx + batch_size;
-        if (end_idx > test_data->num_images) end_idx = test_data->num_images;
+        if (end_idx > actual_test_samples) end_idx = actual_test_samples;
         int actual_batch_size = end_idx - start_idx;
 
         float* batch_data = &test_data->data[start_idx * 3 * 32 * 32];
@@ -173,7 +197,7 @@ int main(int argc, char** argv) {
         total_test_loss += batch_loss * actual_batch_size;
     }
 
-    total_test_loss /= test_data->num_images;
+    total_test_loss /= actual_test_samples;
 
     timer_stop(timer);
     result->inference_time = timer_elapsed(timer);
@@ -181,7 +205,7 @@ int main(int argc, char** argv) {
     printf("\nTest Results:\n");
     printf("  Reconstruction Loss: %.6f\n", total_test_loss);
     printf("  Inference Time:      %.2f seconds\n", result->inference_time);
-    printf("  Throughput:          %.1f imgs/s\n", test_data->num_images / result->inference_time);
+    printf("  Throughput:          %.1f imgs/s\n", actual_test_samples / result->inference_time);
 
     // ===== STEP 5: Extract Latent Features =====
     printf("\n");
@@ -211,9 +235,9 @@ int main(int argc, char** argv) {
     // ===== Final Benchmark Results =====
     result->total_time = result->data_loading_time + result->training_time + result->inference_time;
     result->num_epochs = num_epochs;
-    result->num_batches = (train_data->num_images + batch_size - 1) / batch_size;
+    result->num_batches = (actual_train_samples + batch_size - 1) / batch_size;
     result->avg_batch_time = result->training_time / (num_epochs * result->num_batches);
-    result->throughput = train_data->num_images / (result->training_time / num_epochs);
+    result->throughput = actual_train_samples / (result->training_time / num_epochs);
     result->peak_memory_bytes = 0;  // Not tracking for now
     result->train_accuracy = 0.0f;  // Not applicable for autoencoder
     result->test_accuracy = 0.0f;

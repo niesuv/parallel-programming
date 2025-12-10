@@ -35,6 +35,11 @@ UTILS_OBJ = $(BUILD_DIR)/config.o $(BUILD_DIR)/device.o $(BUILD_DIR)/benchmark.o
 # Common objects
 COMMON_OBJ = $(DATA_OBJ) $(UTILS_OBJ)
 
+# Common objects with CUDA support (for CUDA executables)
+ifdef CUDA_AVAILABLE
+COMMON_OBJ_CUDA = $(DATA_OBJ) $(BUILD_DIR)/config.o $(BUILD_DIR)/device_cuda_enabled.o $(BUILD_DIR)/benchmark.o
+endif
+
 # Autoencoder objects (layers + autoencoder)
 AUTOENCODER_OBJ = $(BUILD_DIR)/conv2d_cpu.o $(BUILD_DIR)/relu_cpu.o $(BUILD_DIR)/maxpool_cpu.o \
                   $(BUILD_DIR)/upsample_cpu.o $(BUILD_DIR)/loss_cpu.o $(BUILD_DIR)/autoencoder.o
@@ -44,6 +49,7 @@ TEST_CIFAR10 = $(BIN_DIR)/test_cifar10
 TEST_DEVICE_COMPARE = $(BIN_DIR)/test_device_compare
 TEST_DEVICE_COMPARE_CUDA = $(BIN_DIR)/test_device_compare_cuda
 TRAIN_AUTOENCODER = $(BIN_DIR)/train_autoencoder
+TEST_CONV2D = $(BIN_DIR)/test_conv2d_simple
 
 # Detect CUDA availability
 CUDA_AVAILABLE := $(shell which nvcc 2>/dev/null)
@@ -67,23 +73,33 @@ dirs:
 # Build test_cifar10 (basic CPU-only test) - now needs COMMON_OBJ for device functions
 $(TEST_CIFAR10): $(TEST_DIR)/test_cifar10.c $(COMMON_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	@chmod +x $@
 	@echo "Built: $@"
 
 # Build test_device_compare (CPU-only version)
 $(TEST_DEVICE_COMPARE): $(TEST_DIR)/test_device_compare.c $(COMMON_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	@chmod +x $@
 	@echo "Built: $@ (CPU-only)"
 
 # Build test_device_compare (CUDA version)
 ifdef CUDA_AVAILABLE
-$(TEST_DEVICE_COMPARE_CUDA): $(TEST_DIR)/test_device_compare.c $(COMMON_OBJ) $(CUDA_OBJ)
+$(TEST_DEVICE_COMPARE_CUDA): $(TEST_DIR)/test_device_compare.c $(COMMON_OBJ_CUDA) $(CUDA_OBJ)
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(LDFLAGS) $(CUDA_LDFLAGS)
+	@chmod +x $@
 	@echo "Built: $@ (with CUDA)"
 endif
 
 # Build train_autoencoder
 $(TRAIN_AUTOENCODER): $(TEST_DIR)/train_autoencoder.c $(COMMON_OBJ) $(AUTOENCODER_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	@chmod +x $@
+	@echo "Built: $@"
+
+# Build test_conv2d_simple
+$(TEST_CONV2D): $(TEST_DIR)/test_conv2d_simple.c $(COMMON_OBJ) $(AUTOENCODER_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	@chmod +x $@
 	@echo "Built: $@"
 
 # Compile data source files
@@ -120,10 +136,12 @@ $(BUILD_DIR)/config.o: $(UTILS_DIR)/config.c $(INCLUDE_DIR)/config.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/device.o: $(UTILS_DIR)/device.c $(INCLUDE_DIR)/device.h $(INCLUDE_DIR)/config.h
-ifdef CUDA_AVAILABLE
-	$(CC) $(CFLAGS) -D__NVCC__ -c $< -o $@
-else
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# Compile device.o with CUDA support (for CUDA executables)
+ifdef CUDA_AVAILABLE
+$(BUILD_DIR)/device_cuda_enabled.o: $(UTILS_DIR)/device.c $(INCLUDE_DIR)/device.h $(INCLUDE_DIR)/config.h
+	$(CC) $(CFLAGS) -D__NVCC__ -c $< -o $@
 endif
 
 $(BUILD_DIR)/benchmark.o: $(UTILS_DIR)/benchmark.c $(INCLUDE_DIR)/benchmark.h $(INCLUDE_DIR)/config.h
@@ -189,16 +207,18 @@ compare-cpu: $(TEST_DEVICE_COMPARE)
 .PHONY: train
 train: $(TRAIN_AUTOENCODER)
 	@echo "Training autoencoder..."
-	@echo "Usage: make train DATA_PATH=<path_to_cifar10_data> [EPOCHS=N] [BATCH_SIZE=N] [LR=f]"
+	@echo "Usage: make train DATA_PATH=<path> [EPOCHS=N] [BATCH_SIZE=N] [LR=f] [NUM_SAMPLES=N]"
 	@if [ -z "$(DATA_PATH)" ]; then \
 		echo "Error: Please specify DATA_PATH"; \
-		echo "Example: make train DATA_PATH=./cifar-10-batches-bin EPOCHS=20 BATCH_SIZE=32 LR=0.001"; \
+		echo "Example: make train DATA_PATH=./cifar-10-batches-bin EPOCHS=20"; \
+		echo "Quick test: make train DATA_PATH=./cifar-10-batches-bin NUM_SAMPLES=1000 EPOCHS=2"; \
 		exit 1; \
 	fi
 	$(TRAIN_AUTOENCODER) $(DATA_PATH) \
 		$(if $(EPOCHS),--epochs $(EPOCHS),) \
 		$(if $(BATCH_SIZE),--batch-size $(BATCH_SIZE),) \
-		$(if $(LR),--lr $(LR),)
+		$(if $(LR),--lr $(LR),) \
+		$(if $(NUM_SAMPLES),--num-samples $(NUM_SAMPLES),)
 
 # Help target
 .PHONY: help
