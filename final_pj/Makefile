@@ -145,6 +145,25 @@ ifdef CUDA_AVAILABLE
 $(BUILD_DIR)/device_cuda.o: $(CORE_DIR)/device_cuda.cu $(INCLUDE_DIR)/device.h | dirs
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
+# GPU Layer CUDA files
+$(BUILD_DIR)/conv2d_gpu.o: $(LAYERS_GPU_DIR)/conv2d_gpu.cu $(INCLUDE_DIR)/layers.h | dirs
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/relu_gpu.o: $(LAYERS_GPU_DIR)/relu_gpu.cu $(INCLUDE_DIR)/layers.h | dirs
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/maxpool_gpu.o: $(LAYERS_GPU_DIR)/maxpool_gpu.cu $(INCLUDE_DIR)/layers.h | dirs
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/upsample_gpu.o: $(LAYERS_GPU_DIR)/upsample_gpu.cu $(INCLUDE_DIR)/layers.h | dirs
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/loss_gpu.o: $(LAYERS_GPU_DIR)/loss_gpu.cu $(INCLUDE_DIR)/layers.h | dirs
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/gpu_layer_conv2d.o: $(LAYERS_GPU_DIR)/gpu_layer_conv2d.cu $(INCLUDE_DIR)/gpu_layer.h $(INCLUDE_DIR)/layers.h | dirs
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
 # GPU Autoencoder CUDA files
 $(BUILD_DIR)/autoencoder_gpu.o: $(MODELS_DIR)/autoencoder_gpu.cu $(INCLUDE_DIR)/autoencoder_gpu.h | dirs
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@

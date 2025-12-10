@@ -106,11 +106,11 @@ void upsample2d_backward_cuda(UpSample2DLayer* layer, const float* d_output, flo
 // ===== Loss functions =====
 // MSE loss for reconstruction
 float mse_loss_cpu(const float* predictions, const float* targets, int size);
-float mse_loss_cuda(const float* predictions, const float* targets, int size);
+float mse_loss_forward_cuda(const float* predictions, const float* targets, int size);
 
 // MSE gradient
 void mse_backward_cpu(const float* predictions, const float* targets, float* d_output, int size);
-void mse_backward_cuda(const float* predictions, const float* targets, float* d_output, int size);
+void mse_loss_backward_cuda(const float* predictions, const float* targets, float* d_output, int size);
 
 // ===== Helper functions =====
 void print_layer_info(const char* name, int batch, int channels, int height, int width);
