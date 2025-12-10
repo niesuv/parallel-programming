@@ -3,6 +3,7 @@
 
 #include "config.h"
 #include <stdint.h>
+#include <stddef.h>
 
 // Timer structure
 typedef struct {

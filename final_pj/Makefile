@@ -64,8 +64,8 @@ dirs:
 	@mkdir -p $(BUILD_DIR)
 	@mkdir -p $(BIN_DIR)
 
-# Build test_cifar10 (basic CPU-only test)
-$(TEST_CIFAR10): $(TEST_DIR)/test_cifar10.c $(DATA_OBJ)
+# Build test_cifar10 (basic CPU-only test) - now needs COMMON_OBJ for device functions
+$(TEST_CIFAR10): $(TEST_DIR)/test_cifar10.c $(COMMON_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	@echo "Built: $@"
 

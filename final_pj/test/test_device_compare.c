@@ -4,6 +4,7 @@
 #include "benchmark.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 // Test function to benchmark data loading and device transfer
 void test_device_performance(const char* data_dir, DeviceType device) {
