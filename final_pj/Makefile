@@ -38,7 +38,7 @@ COMMON_OBJ = $(DATA_OBJ) $(UTILS_OBJ)
 
 # Common objects with CUDA support (for CUDA executables)
 ifdef CUDA_AVAILABLE
-COMMON_OBJ_CUDA = $(DATA_OBJ) $(BUILD_DIR)/config.o $(BUILD_DIR)/device_cuda_enabled.o $(BUILD_DIR)/benchmark.o
+COMMON_OBJ_CUDA = $(DATA_OBJ) $(BUILD_DIR)/config.o $(BUILD_DIR)/device_cuda_enabled.o $(BUILD_DIR)/device_cuda.o $(BUILD_DIR)/benchmark.o
 endif
 
 # Autoencoder objects (layers + autoencoder)
