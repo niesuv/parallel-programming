@@ -44,11 +44,17 @@ endif
 AUTOENCODER_OBJ = $(BUILD_DIR)/conv2d_cpu.o $(BUILD_DIR)/relu_cpu.o $(BUILD_DIR)/maxpool_cpu.o \
                   $(BUILD_DIR)/upsample_cpu.o $(BUILD_DIR)/loss_cpu.o $(BUILD_DIR)/autoencoder.o
 
+# GPU Autoencoder objects (CUDA kernels + operations + training)
+ifdef CUDA_AVAILABLE
+GPU_AUTOENCODER_OBJ = $(BUILD_DIR)/autoencoder_gpu.o $(BUILD_DIR)/autoencoder_gpu_ops.o $(BUILD_DIR)/autoencoder_gpu_train.o
+endif
+
 # Test executables
 TEST_CIFAR10 = $(BIN_DIR)/test_cifar10
 TEST_DEVICE_COMPARE = $(BIN_DIR)/test_device_compare
 TEST_DEVICE_COMPARE_CUDA = $(BIN_DIR)/test_device_compare_cuda
 TRAIN_AUTOENCODER = $(BIN_DIR)/train_autoencoder
+TRAIN_AUTOENCODER_GPU = $(BIN_DIR)/train_autoencoder_gpu
 TEST_CONV2D = $(BIN_DIR)/test_conv2d_simple
 
 # Detect CUDA availability
@@ -57,8 +63,8 @@ CUDA_AVAILABLE := $(shell which nvcc 2>/dev/null)
 # Default target
 .PHONY: all
 ifdef CUDA_AVAILABLE
-all: dirs $(TEST_CIFAR10) $(TEST_DEVICE_COMPARE_CUDA) $(TRAIN_AUTOENCODER)
-	@echo "Built with CUDA support"
+all: dirs $(TEST_CIFAR10) $(TEST_DEVICE_COMPARE_CUDA) $(TRAIN_AUTOENCODER) $(TRAIN_AUTOENCODER_GPU)
+	@echo "Built with CUDA support (including GPU autoencoder)"
 else
 all: dirs $(TEST_CIFAR10) $(TEST_DEVICE_COMPARE) $(TRAIN_AUTOENCODER)
 	@echo "Built CPU-only version (CUDA not available)"
@@ -102,6 +108,14 @@ $(TEST_CONV2D): $(TEST_DIR)/test_conv2d_simple.c $(COMMON_OBJ) $(AUTOENCODER_OBJ
 	@chmod +x $@
 	@echo "Built: $@"
 
+# Build train_autoencoder_gpu (CUDA version)
+ifdef CUDA_AVAILABLE
+$(TRAIN_AUTOENCODER_GPU): $(TEST_DIR)/train_autoencoder_gpu.c $(COMMON_OBJ) $(AUTOENCODER_OBJ) $(GPU_AUTOENCODER_OBJ) | dirs
+	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(LDFLAGS) $(CUDA_LDFLAGS)
+	@chmod +x $@
+	@echo "Built: $@ (GPU Naive Implementation)"
+endif
+
 # Compile data source files
 $(BUILD_DIR)/cifar10.o: $(DATA_DIR)/cifar10.c $(INCLUDE_DIR)/cifar10.h $(INCLUDE_DIR)/config.h $(INCLUDE_DIR)/device.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -128,6 +142,16 @@ $(BUILD_DIR)/autoencoder.o: $(CPU_DIR)/autoencoder.c $(INCLUDE_DIR)/autoencoder.
 # Compile CUDA source files (if CUDA is available)
 ifdef CUDA_AVAILABLE
 $(BUILD_DIR)/device_cuda.o: $(CUDA_DIR)/device_cuda.cu $(INCLUDE_DIR)/device.h | dirs
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+# GPU Autoencoder CUDA files
+$(BUILD_DIR)/autoencoder_gpu.o: $(CUDA_DIR)/autoencoder_gpu.cu $(INCLUDE_DIR)/autoencoder_gpu.h | dirs
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/autoencoder_gpu_ops.o: $(CUDA_DIR)/autoencoder_gpu_ops.cu $(INCLUDE_DIR)/autoencoder_gpu.h | dirs
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/autoencoder_gpu_train.o: $(CUDA_DIR)/autoencoder_gpu_train.cu $(INCLUDE_DIR)/autoencoder_gpu.h | dirs
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 endif
 
@@ -203,10 +227,10 @@ compare-cpu: $(TEST_DEVICE_COMPARE)
 	fi
 	$(TEST_DEVICE_COMPARE) $(DATA_PATH) --cpu-only
 
-# Train autoencoder
+# Train autoencoder (CPU)
 .PHONY: train
 train: $(TRAIN_AUTOENCODER)
-	@echo "Training autoencoder..."
+	@echo "Training autoencoder on CPU..."
 	@echo "Usage: make train DATA_PATH=<path> [EPOCHS=N] [BATCH_SIZE=N] [LR=f] [NUM_SAMPLES=N]"
 	@if [ -z "$(DATA_PATH)" ]; then \
 		echo "Error: Please specify DATA_PATH"; \
@@ -220,6 +244,25 @@ train: $(TRAIN_AUTOENCODER)
 		$(if $(LR),--lr $(LR),) \
 		$(if $(NUM_SAMPLES),--num-samples $(NUM_SAMPLES),)
 
+# Train autoencoder on GPU (Naive Implementation)
+ifdef CUDA_AVAILABLE
+.PHONY: train-gpu
+train-gpu: $(TRAIN_AUTOENCODER_GPU)
+	@echo "Training autoencoder on GPU (Naive Implementation)..."
+	@echo "Usage: make train-gpu DATA_PATH=<path> [EPOCHS=N] [BATCH_SIZE=N] [LR=f] [NUM_SAMPLES=N]"
+	@if [ -z "$(DATA_PATH)" ]; then \
+		echo "Error: Please specify DATA_PATH"; \
+		echo "Example: make train-gpu DATA_PATH=./cifar-10-batches-bin EPOCHS=20"; \
+		echo "Quick test: make train-gpu DATA_PATH=./cifar-10-batches-bin NUM_SAMPLES=2000 EPOCHS=2"; \
+		exit 1; \
+	fi
+	$(TRAIN_AUTOENCODER_GPU) $(DATA_PATH) \
+		$(if $(EPOCHS),--epochs $(EPOCHS),) \
+		$(if $(BATCH_SIZE),--batch-size $(BATCH_SIZE),) \
+		$(if $(LR),--lr $(LR),) \
+		$(if $(NUM_SAMPLES),--num-samples $(NUM_SAMPLES),)
+endif
+
 # Help target
 .PHONY: help
 help:
@@ -231,6 +274,9 @@ help:
 	@echo "  compare          - Run CPU vs GPU comparison test"
 	@echo "  compare-cpu      - Run CPU-only comparison test"
 	@echo "  train            - Train autoencoder (CPU)"
+ifdef CUDA_AVAILABLE
+	@echo "  train-gpu        - Train autoencoder on GPU (Naive)"
+endif
 	@echo "  clean            - Remove build artifacts"
 	@echo "  help             - Show this help message"
 	@echo ""
