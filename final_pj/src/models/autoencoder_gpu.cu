@@ -18,10 +18,10 @@
 // 2.1 GPU Memory Management
 // ============================================================================
 
-GPUAutoencoder* gpu_autoencoder_create(float learning_rate, int batch_size, int num_epochs) {
-    GPUAutoencoder* gpu_ae = (GPUAutoencoder*)malloc(sizeof(GPUAutoencoder));
+Autoencoder_GPU* autoencoder_gpu_create(float learning_rate, int batch_size, int num_epochs) {
+    Autoencoder_GPU* gpu_ae = (Autoencoder_GPU*)malloc(sizeof(GPUAutoencoder));
     if (!gpu_ae) {
-        fprintf(stderr, "Failed to allocate GPUAutoencoder structure\n");
+        fprintf(stderr, "Failed to allocate Autoencoder_GPU structure\n");
         return NULL;
     }
 
@@ -116,7 +116,7 @@ GPUAutoencoder* gpu_autoencoder_create(float learning_rate, int batch_size, int 
     return gpu_ae;
 }
 
-void gpu_autoencoder_free(GPUAutoencoder* gpu_ae) {
+void autoencoder_gpu_free(Autoencoder_GPU* gpu_ae) {
     if (!gpu_ae) return;
 
     // Free weight memory
@@ -177,7 +177,7 @@ void gpu_autoencoder_free(GPUAutoencoder* gpu_ae) {
     printf("✅ GPU Autoencoder freed\n");
 }
 
-void gpu_autoencoder_copy_weights_to_device(GPUAutoencoder* gpu_ae,
+void autoencoder_gpu_copy_weights_to_device(Autoencoder_GPU* gpu_ae,
                                             Conv2DLayer* enc1, Conv2DLayer* enc2,
                                             Conv2DLayer* dec1, Conv2DLayer* dec2, Conv2DLayer* dec3) {
     // Copy enc1 weights (256 * 3 * 3 * 3)
@@ -213,7 +213,7 @@ void gpu_autoencoder_copy_weights_to_device(GPUAutoencoder* gpu_ae,
     printf("✅ Weights copied to GPU\n");
 }
 
-void gpu_autoencoder_copy_weights_to_host(GPUAutoencoder* gpu_ae,
+void autoencoder_gpu_copy_weights_to_host(Autoencoder_GPU* gpu_ae,
                                           Conv2DLayer* enc1, Conv2DLayer* enc2,
                                           Conv2DLayer* dec1, Conv2DLayer* dec2, Conv2DLayer* dec3) {
     // Copy enc1 weights back

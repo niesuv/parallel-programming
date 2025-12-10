@@ -75,41 +75,41 @@ typedef struct {
     int dec2_out_size;
     int up2_out_size;
     int output_size;
-} GPUAutoencoder;
+} Autoencoder_GPU;
 
 // 2.1 GPU Memory Management Functions
 
 // Create GPU autoencoder and allocate all device memory
-GPUAutoencoder* gpu_autoencoder_create(float learning_rate, int batch_size, int num_epochs);
+Autoencoder_GPU* autoencoder_gpu_create(float learning_rate, int batch_size, int num_epochs);
 
 // Free all device memory
-void gpu_autoencoder_free(GPUAutoencoder* gpu_ae);
+void autoencoder_gpu_free(Autoencoder_GPU* gpu_ae);
 
 // Copy weights from CPU autoencoder to GPU
-void gpu_autoencoder_copy_weights_to_device(GPUAutoencoder* gpu_ae,
+void autoencoder_gpu_copy_weights_to_device(Autoencoder_GPU* gpu_ae,
                                             Conv2DLayer* enc1, Conv2DLayer* enc2,
                                             Conv2DLayer* dec1, Conv2DLayer* dec2, Conv2DLayer* dec3);
 
 // Copy weights from GPU back to CPU
-void gpu_autoencoder_copy_weights_to_host(GPUAutoencoder* gpu_ae,
+void autoencoder_gpu_copy_weights_to_host(Autoencoder_GPU* gpu_ae,
                                           Conv2DLayer* enc1, Conv2DLayer* enc2,
                                           Conv2DLayer* dec1, Conv2DLayer* dec2, Conv2DLayer* dec3);
 
 // 2.2 Naive GPU Kernel Declarations (implemented in .cu file)
 
 // Forward pass on GPU
-void gpu_autoencoder_forward(GPUAutoencoder* gpu_ae, const float* h_input, int batch_size);
+void autoencoder_gpu_forward(Autoencoder_GPU* gpu_ae, const float* h_input, int batch_size);
 
 // Backward pass on GPU
-void gpu_autoencoder_backward(GPUAutoencoder* gpu_ae, const float* h_target, int batch_size);
+void autoencoder_gpu_backward(Autoencoder_GPU* gpu_ae, const float* h_target, int batch_size);
 
 // Update weights using SGD
-void gpu_autoencoder_update_weights(GPUAutoencoder* gpu_ae);
+void autoencoder_gpu_update_weights(Autoencoder_GPU* gpu_ae);
 
 // Compute MSE loss
-float gpu_autoencoder_compute_loss(GPUAutoencoder* gpu_ae, const float* h_target, int batch_size);
+float autoencoder_gpu_compute_loss(Autoencoder_GPU* gpu_ae, const float* h_target, int batch_size);
 
 // 2.3 Training function
-float gpu_autoencoder_train_epoch(GPUAutoencoder* gpu_ae, float* train_data, int num_samples, int verbose);
+float autoencoder_gpu_train_epoch(Autoencoder_GPU* gpu_ae, float* train_data, int num_samples, int verbose);
 
 #endif // AUTOENCODER_GPU_H

@@ -48,32 +48,32 @@ typedef struct {
     float* d_enc1_out;
 
     DeviceType device;
-} Autoencoder;
+} Autoencoder_CPU;
 
 // Create and initialize autoencoder
-Autoencoder* autoencoder_create(float learning_rate, int batch_size, int num_epochs, DeviceType device);
-void autoencoder_free(Autoencoder* ae);
+Autoencoder_CPU* autoencoder_cpu_create(float learning_rate, int batch_size, int num_epochs);
+void autoencoder_cpu_free(Autoencoder_CPU* ae);
 
 // Forward pass: input (batch, 3, 32, 32) -> output (batch, 3, 32, 32)
-void autoencoder_forward(Autoencoder* ae, const float* input, int batch_size);
+void autoencoder_cpu_forward(Autoencoder_CPU* ae, const float* input, int batch_size);
 
 // Backward pass: compute gradients
-void autoencoder_backward(Autoencoder* ae, const float* input, const float* target, int batch_size);
+void autoencoder_cpu_backward(Autoencoder_CPU* ae, const float* input, const float* target, int batch_size);
 
 // Update weights using computed gradients
-void autoencoder_update_weights(Autoencoder* ae);
+void autoencoder_cpu_update_weights(Autoencoder_CPU* ae);
 
 // Extract latent representation (encoder only)
-void autoencoder_encode(Autoencoder* ae, const float* input, float* latent_out, int batch_size);
+void autoencoder_cpu_encode(Autoencoder_CPU* ae, const float* input, float* latent_out, int batch_size);
 
 // Training function
-float autoencoder_train_epoch(Autoencoder* ae, float* train_data, int num_samples, int verbose);
+float autoencoder_cpu_train_epoch(Autoencoder_CPU* ae, float* train_data, int num_samples, int verbose);
 
 // Save/Load model
-int autoencoder_save_weights(Autoencoder* ae, const char* filename);
-int autoencoder_load_weights(Autoencoder* ae, const char* filename);
+int autoencoder_cpu_save_weights(Autoencoder_CPU* ae, const char* filename);
+int autoencoder_cpu_load_weights(Autoencoder_CPU* ae, const char* filename);
 
 // Print model summary
-void autoencoder_print_summary(Autoencoder* ae);
+void autoencoder_cpu_print_summary(Autoencoder_CPU* ae);
 
 #endif // AUTOENCODER_H

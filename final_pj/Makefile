@@ -11,25 +11,26 @@ CUDA_LDFLAGS = -lcudart
 
 # Directories
 SRC_DIR = src
-DATA_DIR = $(SRC_DIR)/data
-CPU_DIR = $(SRC_DIR)/cpu
-CUDA_DIR = $(SRC_DIR)/cuda
-UTILS_DIR = $(SRC_DIR)/utils
+LAYERS_DIR = $(SRC_DIR)/layers
+LAYERS_CPU_DIR = $(LAYERS_DIR)/cpu
+LAYERS_GPU_DIR = $(LAYERS_DIR)/gpu
+MODELS_DIR = $(SRC_DIR)/models
+CORE_DIR = $(SRC_DIR)/core
 TEST_DIR = test
 BUILD_DIR = build
 BIN_DIR = bin
 INCLUDE_DIR = include
 
 # Source files
-DATA_SRC = $(DATA_DIR)/cifar10.c
-CPU_SRC = $(wildcard $(CPU_DIR)/*.c)
-CUDA_SRC = $(wildcard $(CUDA_DIR)/*.cu)
-UTILS_SRC = $(UTILS_DIR)/config.c $(UTILS_DIR)/device.c $(UTILS_DIR)/benchmark.c
+DATA_SRC = $(CORE_DIR)/cifar10.c
+CPU_SRC = $(wildcard $(LAYERS_CPU_DIR)/*.c)
+CUDA_SRC = $(wildcard $(LAYERS_GPU_DIR)/*.cu)
+UTILS_SRC = $(CORE_DIR)/config.c $(CORE_DIR)/device.c $(CORE_DIR)/benchmark.c
 
 # Object files
 DATA_OBJ = $(BUILD_DIR)/cifar10.o
-CPU_OBJ = $(patsubst $(CPU_DIR)/%.c, $(BUILD_DIR)/%.o, $(CPU_SRC))
-CUDA_OBJ = $(patsubst $(CUDA_DIR)/%.cu, $(BUILD_DIR)/%.o, $(CUDA_SRC))
+CPU_OBJ = $(patsubst $(LAYERS_CPU_DIR)/%.c, $(BUILD_DIR)/%.o, $(CPU_SRC))
+CUDA_OBJ = $(patsubst $(LAYERS_GPU_DIR)/%.cu, $(BUILD_DIR)/%.o, $(CUDA_SRC))
 UTILS_OBJ = $(BUILD_DIR)/config.o $(BUILD_DIR)/device.o $(BUILD_DIR)/benchmark.o
 
 # Common objects
@@ -117,58 +118,58 @@ $(TRAIN_AUTOENCODER_GPU): $(TEST_DIR)/train_autoencoder_gpu.c $(COMMON_OBJ) $(AU
 endif
 
 # Compile data source files
-$(BUILD_DIR)/cifar10.o: $(DATA_DIR)/cifar10.c $(INCLUDE_DIR)/cifar10.h $(INCLUDE_DIR)/config.h $(INCLUDE_DIR)/device.h | dirs
+$(BUILD_DIR)/cifar10.o: $(CORE_DIR)/cifar10.c $(INCLUDE_DIR)/cifar10.h $(INCLUDE_DIR)/config.h $(INCLUDE_DIR)/device.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Compile CPU source files (layers and autoencoder)
-$(BUILD_DIR)/conv2d_cpu.o: $(CPU_DIR)/conv2d_cpu.c $(INCLUDE_DIR)/layers.h | dirs
+$(BUILD_DIR)/conv2d_cpu.o: $(LAYERS_CPU_DIR)/conv2d_cpu.c $(INCLUDE_DIR)/layers.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/relu_cpu.o: $(CPU_DIR)/relu_cpu.c $(INCLUDE_DIR)/layers.h | dirs
+$(BUILD_DIR)/relu_cpu.o: $(LAYERS_CPU_DIR)/relu_cpu.c $(INCLUDE_DIR)/layers.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/maxpool_cpu.o: $(CPU_DIR)/maxpool_cpu.c $(INCLUDE_DIR)/layers.h | dirs
+$(BUILD_DIR)/maxpool_cpu.o: $(LAYERS_CPU_DIR)/maxpool_cpu.c $(INCLUDE_DIR)/layers.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/upsample_cpu.o: $(CPU_DIR)/upsample_cpu.c $(INCLUDE_DIR)/layers.h | dirs
+$(BUILD_DIR)/upsample_cpu.o: $(LAYERS_CPU_DIR)/upsample_cpu.c $(INCLUDE_DIR)/layers.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/loss_cpu.o: $(CPU_DIR)/loss_cpu.c $(INCLUDE_DIR)/layers.h | dirs
+$(BUILD_DIR)/loss_cpu.o: $(LAYERS_CPU_DIR)/loss_cpu.c $(INCLUDE_DIR)/layers.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/autoencoder.o: $(CPU_DIR)/autoencoder.c $(INCLUDE_DIR)/autoencoder.h $(INCLUDE_DIR)/layers.h | dirs
+$(BUILD_DIR)/autoencoder.o: $(MODELS_DIR)/autoencoder_cpu.c $(INCLUDE_DIR)/autoencoder.h $(INCLUDE_DIR)/layers.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Compile CUDA source files (if CUDA is available)
 ifdef CUDA_AVAILABLE
-$(BUILD_DIR)/device_cuda.o: $(CUDA_DIR)/device_cuda.cu $(INCLUDE_DIR)/device.h | dirs
+$(BUILD_DIR)/device_cuda.o: $(CORE_DIR)/device_cuda.cu $(INCLUDE_DIR)/device.h | dirs
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
 # GPU Autoencoder CUDA files
-$(BUILD_DIR)/autoencoder_gpu.o: $(CUDA_DIR)/autoencoder_gpu.cu $(INCLUDE_DIR)/autoencoder_gpu.h | dirs
+$(BUILD_DIR)/autoencoder_gpu.o: $(MODELS_DIR)/autoencoder_gpu.cu $(INCLUDE_DIR)/autoencoder_gpu.h | dirs
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/autoencoder_gpu_ops.o: $(CUDA_DIR)/autoencoder_gpu_ops.cu $(INCLUDE_DIR)/autoencoder_gpu.h | dirs
+$(BUILD_DIR)/autoencoder_gpu_ops.o: $(MODELS_DIR)/autoencoder_gpu_ops.cu $(INCLUDE_DIR)/autoencoder_gpu.h | dirs
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/autoencoder_gpu_train.o: $(CUDA_DIR)/autoencoder_gpu_train.cu $(INCLUDE_DIR)/autoencoder_gpu.h | dirs
+$(BUILD_DIR)/autoencoder_gpu_train.o: $(MODELS_DIR)/autoencoder_gpu_train.cu $(INCLUDE_DIR)/autoencoder_gpu.h | dirs
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 endif
 
 # Compile utility source files
-$(BUILD_DIR)/config.o: $(UTILS_DIR)/config.c $(INCLUDE_DIR)/config.h | dirs
+$(BUILD_DIR)/config.o: $(CORE_DIR)/config.c $(INCLUDE_DIR)/config.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/device.o: $(UTILS_DIR)/device.c $(INCLUDE_DIR)/device.h $(INCLUDE_DIR)/config.h | dirs
+$(BUILD_DIR)/device.o: $(CORE_DIR)/device.c $(INCLUDE_DIR)/device.h $(INCLUDE_DIR)/config.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Compile device.o with CUDA support (for CUDA executables)
 ifdef CUDA_AVAILABLE
-$(BUILD_DIR)/device_cuda_enabled.o: $(UTILS_DIR)/device.c $(INCLUDE_DIR)/device.h $(INCLUDE_DIR)/config.h | dirs
+$(BUILD_DIR)/device_cuda_enabled.o: $(CORE_DIR)/device.c $(INCLUDE_DIR)/device.h $(INCLUDE_DIR)/config.h | dirs
 	$(CC) $(CFLAGS) -D__NVCC__ -c $< -o $@
 endif
 
-$(BUILD_DIR)/benchmark.o: $(UTILS_DIR)/benchmark.c $(INCLUDE_DIR)/benchmark.h $(INCLUDE_DIR)/config.h | dirs
+$(BUILD_DIR)/benchmark.o: $(CORE_DIR)/benchmark.c $(INCLUDE_DIR)/benchmark.h $(INCLUDE_DIR)/config.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Clean build artifacts

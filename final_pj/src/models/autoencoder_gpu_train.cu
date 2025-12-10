@@ -29,7 +29,7 @@ static void shuffle_indices(int* indices, int n) {
     }
 }
 
-float gpu_autoencoder_train_epoch(GPUAutoencoder* gpu_ae, float* train_data, int num_samples, int verbose) {
+float autoencoder_gpu_train_epoch(Autoencoder_GPU* gpu_ae, float* train_data, int num_samples, int verbose) {
     int batch_size = gpu_ae->batch_size;
     int num_batches = num_samples / batch_size;
     float total_loss = 0.0f;
@@ -76,17 +76,17 @@ float gpu_autoencoder_train_epoch(GPUAutoencoder* gpu_ae, float* train_data, int
         CUDA_CHECK(cudaEventRecord(start));
 
         // Forward pass
-        gpu_autoencoder_forward(gpu_ae, h_batch_input, batch_size);
+        autoencoder_gpu_forward(gpu_ae, h_batch_input, batch_size);
 
         // Compute loss
-        float batch_loss = gpu_autoencoder_compute_loss(gpu_ae, h_batch_target, batch_size);
+        float batch_loss = autoencoder_gpu_compute_loss(gpu_ae, h_batch_target, batch_size);
         total_loss += batch_loss;
 
         // Backward pass
-        gpu_autoencoder_backward(gpu_ae, h_batch_target, batch_size);
+        autoencoder_gpu_backward(gpu_ae, h_batch_target, batch_size);
 
         // Update weights
-        gpu_autoencoder_update_weights(gpu_ae);
+        autoencoder_gpu_update_weights(gpu_ae);
 
         // Stop GPU timer
         CUDA_CHECK(cudaEventRecord(stop));

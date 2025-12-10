@@ -36,7 +36,7 @@ __global__ void naive_conv2d_backward_bias_kernel(const float*, float*, int, int
 // 2.3 GPU Forward Pass
 // ============================================================================
 
-void gpu_autoencoder_forward(GPUAutoencoder* gpu_ae, const float* h_input, int batch_size) {
+void autoencoder_gpu_forward(Autoencoder_GPU* gpu_ae, const float* h_input, int batch_size) {
     const int threads = 256;
 
     // Copy input from host to device
@@ -139,7 +139,7 @@ void gpu_autoencoder_forward(GPUAutoencoder* gpu_ae, const float* h_input, int b
 // 2.4 GPU Backward Pass
 // ============================================================================
 
-void gpu_autoencoder_backward(GPUAutoencoder* gpu_ae, const float* h_target, int batch_size) {
+void autoencoder_gpu_backward(Autoencoder_GPU* gpu_ae, const float* h_target, int batch_size) {
     const int threads = 256;
 
     // Copy target from host to device
@@ -346,7 +346,7 @@ __global__ void sgd_update_kernel(
     }
 }
 
-void gpu_autoencoder_update_weights(GPUAutoencoder* gpu_ae) {
+void autoencoder_gpu_update_weights(Autoencoder_GPU* gpu_ae) {
     const int threads = 256;
     float lr = gpu_ae->learning_rate;
 
@@ -405,7 +405,7 @@ void gpu_autoencoder_update_weights(GPUAutoencoder* gpu_ae) {
 }
 
 // Compute MSE loss
-float gpu_autoencoder_compute_loss(GPUAutoencoder* gpu_ae, const float* h_target, int batch_size) {
+float autoencoder_gpu_compute_loss(Autoencoder_GPU* gpu_ae, const float* h_target, int batch_size) {
     const int threads = 256;
     int blocks = (gpu_ae->output_size + threads - 1) / threads;
 

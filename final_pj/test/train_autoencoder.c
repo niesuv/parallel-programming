@@ -104,7 +104,7 @@ int main(int argc, char** argv) {
     printf("  Epochs:           %d\n", num_epochs);
     printf("  Device:           CPU\n\n");
 
-    Autoencoder* ae = autoencoder_create(learning_rate, batch_size, num_epochs, DEVICE_CPU);
+    Autoencoder_CPU* ae = autoencoder_cpu_create(learning_rate, batch_size, num_epochs);
     if (!ae) {
         fprintf(stderr, "Failed to create autoencoder\n");
         cifar10_free_dataset(train_data);
@@ -112,7 +112,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    autoencoder_print_summary(ae);
+    autoencoder_cpu_print_summary(ae);
 
     // ===== STEP 3: Train Autoencoder =====
     printf("\n");
@@ -133,7 +133,7 @@ int main(int argc, char** argv) {
         Timer* epoch_timer = timer_create();
         timer_start(epoch_timer);
 
-        float epoch_loss = autoencoder_train_epoch(ae, train_data->data, actual_train_samples, 1);
+        float epoch_loss = autoencoder_cpu_train_epoch(ae, train_data->data, actual_train_samples, 1);
 
         timer_stop(epoch_timer);
         double epoch_time = timer_elapsed(epoch_timer);
@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
         if (epoch_loss < best_loss) {
             best_loss = epoch_loss;
             printf("  ✓ New best loss! Saving model...\n");
-            autoencoder_save_weights(ae, "autoencoder_best.weights");
+            autoencoder_cpu_save_weights(ae, "autoencoder_best.weights");
         }
 
         printf("\n");
@@ -192,7 +192,7 @@ int main(int argc, char** argv) {
         float* batch_data = &test_data->data[start_idx * 3 * 32 * 32];
 
         // Forward pass only
-        autoencoder_forward(ae, batch_data, actual_batch_size);
+        autoencoder_cpu_forward(ae, batch_data, actual_batch_size);
         float batch_loss = mse_loss_cpu(ae->output, batch_data, actual_batch_size * 3 * 32 * 32);
         total_test_loss += batch_loss * actual_batch_size;
     }
@@ -218,7 +218,7 @@ int main(int argc, char** argv) {
 
     // Extract latent features for first 10 images
     float* latent_features = (float*)malloc(10 * 128 * 8 * 8 * sizeof(float));
-    autoencoder_encode(ae, train_data->data, latent_features, 10);
+    autoencoder_cpu_encode(ae, train_data->data, latent_features, 10);
 
     printf("Sample latent feature statistics (first image):\n");
     float min_val = latent_features[0], max_val = latent_features[0], sum = 0.0f;
@@ -250,7 +250,7 @@ int main(int argc, char** argv) {
     printf("Benchmark results saved to autoencoder_benchmark_cpu.txt\n");
 
     // Cleanup
-    autoencoder_free(ae);
+    autoencoder_cpu_free(ae);
     cifar10_free_dataset(train_data);
     cifar10_free_dataset(test_data);
     timer_free(timer);

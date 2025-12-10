@@ -75,13 +75,13 @@ int main(int argc, char** argv) {
     printf(" STEP 1: Loading CIFAR-10 Data\n");
     printf("═══════════════════════════════════════════════════════════\n");
 
-    CIFAR10Dataset* train_data = cifar10_load_train(data_path, DEVICE_CPU);
+    CIFAR10Dataset* train_data = cifar10_load_train(data_path, );
     if (!train_data) {
         fprintf(stderr, "Failed to load training data\n");
         return 1;
     }
 
-    CIFAR10Dataset* test_data = cifar10_load_test(data_path, DEVICE_CPU);
+    CIFAR10Dataset* test_data = cifar10_load_test(data_path, );
     if (!test_data) {
         fprintf(stderr, "Failed to load test data\n");
         cifar10_free(train_data);
@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
     printf(" STEP 2: Creating GPU Autoencoder\n");
     printf("═══════════════════════════════════════════════════════════\n");
 
-    GPUAutoencoder* gpu_ae = gpu_autoencoder_create(learning_rate, batch_size, epochs);
+    Autoencoder_GPU* gpu_ae = autoencoder_gpu_create(learning_rate, batch_size, epochs);
     if (!gpu_ae) {
         fprintf(stderr, "Failed to create GPU autoencoder\n");
         cifar10_free(train_data);
@@ -114,17 +114,17 @@ int main(int argc, char** argv) {
     }
 
     // Also create CPU autoencoder for weight initialization
-    Autoencoder* cpu_ae = autoencoder_create(learning_rate, batch_size, epochs, DEVICE_CPU);
+    Autoencoder_CPU* cpu_ae = autoencoder_cpu_create(learning_rate, batch_size, epochs, );
     if (!cpu_ae) {
         fprintf(stderr, "Failed to create CPU autoencoder\n");
-        gpu_autoencoder_free(gpu_ae);
+        autoencoder_gpu_free(gpu_ae);
         cifar10_free(train_data);
         cifar10_free(test_data);
         return 1;
     }
 
     // Copy weights from CPU to GPU
-    gpu_autoencoder_copy_weights_to_device(gpu_ae,
+    autoencoder_gpu_copy_weights_to_device(gpu_ae,
                                            cpu_ae->enc_conv1, cpu_ae->enc_conv2,
                                            cpu_ae->dec_conv1, cpu_ae->dec_conv2, cpu_ae->dec_conv3);
 
@@ -140,7 +140,7 @@ int main(int argc, char** argv) {
     for (int epoch = 0; epoch < epochs; epoch++) {
         printf("\n[Epoch %d/%d]\n", epoch + 1, epochs);
 
-        float train_loss = gpu_autoencoder_train_epoch(gpu_ae, train_data->data, num_train, 1);
+        float train_loss = autoencoder_gpu_train_epoch(gpu_ae, train_data->data, num_train, 1);
 
         printf("  Training Loss: %.6f\n", train_loss);
 
@@ -149,10 +149,10 @@ int main(int argc, char** argv) {
             printf("  🎯 New best loss!\n");
 
             // Copy weights back to CPU for saving
-            gpu_autoencoder_copy_weights_to_host(gpu_ae,
+            autoencoder_gpu_copy_weights_to_host(gpu_ae,
                                                  cpu_ae->enc_conv1, cpu_ae->enc_conv2,
                                                  cpu_ae->dec_conv1, cpu_ae->dec_conv2, cpu_ae->dec_conv3);
-            autoencoder_save_weights(cpu_ae, "autoencoder_best_gpu.weights");
+            autoencoder_cpu_save_weights(cpu_ae, "autoencoder_best_gpu.weights");
         }
     }
 
@@ -195,8 +195,8 @@ int main(int argc, char** argv) {
     printf(" Cleanup\n");
     printf("═══════════════════════════════════════════════════════════\n");
 
-    gpu_autoencoder_free(gpu_ae);
-    autoencoder_free(cpu_ae);
+    autoencoder_gpu_free(gpu_ae);
+    autoencoder_cpu_free(cpu_ae);
     cifar10_free(train_data);
     cifar10_free(test_data);
 

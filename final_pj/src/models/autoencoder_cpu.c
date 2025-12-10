@@ -5,35 +5,35 @@
 #include <time.h>
 
 // Create autoencoder
-Autoencoder* autoencoder_create(float learning_rate, int batch_size, int num_epochs, DeviceType device) {
+Autoencoder_CPU* autoencoder_cpu_create(float learning_rate, int batch_size, int num_epochs) {
     printf("\n╔════════════════════════════════════════════════╗\n");
     printf("║     Creating Autoencoder Architecture         ║\n");
     printf("╚════════════════════════════════════════════════╝\n\n");
 
-    Autoencoder* ae = (Autoencoder*)malloc(sizeof(Autoencoder));
+    Autoencoder_CPU* ae = (Autoencoder_CPU*)malloc(sizeof(Autoencoder_CPU));
     if (!ae) return NULL;
 
     ae->learning_rate = learning_rate;
     ae->batch_size = batch_size;
     ae->num_epochs = num_epochs;
-    ae->device = device;
+    ae->device = DEVICE_CPU;
 
     // Create encoder layers
     printf("Creating Encoder layers...\n");
-    ae->enc_conv1 = conv2d_create(3, 256, 3, 1, 1, 32, 32, device);     // (32,32,3) -> (32,32,256)
-    ae->enc_pool1 = maxpool2d_create(2, 2, 256, 32, 32, device);        // -> (16,16,256)
-    ae->enc_conv2 = conv2d_create(256, 128, 3, 1, 1, 16, 16, device);   // -> (16,16,128)
-    ae->enc_pool2 = maxpool2d_create(2, 2, 128, 16, 16, device);        // -> (8,8,128)
+    ae->enc_conv1 = conv2d_create(3, 256, 3, 1, 1, 32, 32, DEVICE_CPU);     // (32,32,3) -> (32,32,256)
+    ae->enc_pool1 = maxpool2d_create(2, 2, 256, 32, 32, DEVICE_CPU);        // -> (16,16,256)
+    ae->enc_conv2 = conv2d_create(256, 128, 3, 1, 1, 16, 16, DEVICE_CPU);   // -> (16,16,128)
+    ae->enc_pool2 = maxpool2d_create(2, 2, 128, 16, 16, DEVICE_CPU);        // -> (8,8,128)
     printf("  ✓ Conv2D(3->256) + MaxPool -> (16,16,256)\n");
     printf("  ✓ Conv2D(256->128) + MaxPool -> (8,8,128) [LATENT]\n");
 
     // Create decoder layers
     printf("\nCreating Decoder layers...\n");
-    ae->dec_conv1 = conv2d_create(128, 128, 3, 1, 1, 8, 8, device);     // (8,8,128) -> (8,8,128)
-    ae->dec_up1 = upsample2d_create(2, 128, 8, 8, device);              // -> (16,16,128)
-    ae->dec_conv2 = conv2d_create(128, 256, 3, 1, 1, 16, 16, device);   // -> (16,16,256)
-    ae->dec_up2 = upsample2d_create(2, 256, 16, 16, device);            // -> (32,32,256)
-    ae->dec_conv3 = conv2d_create(256, 3, 3, 1, 1, 32, 32, device);     // -> (32,32,3)
+    ae->dec_conv1 = conv2d_create(128, 128, 3, 1, 1, 8, 8, DEVICE_CPU);     // (8,8,128) -> (8,8,128)
+    ae->dec_up1 = upsample2d_create(2, 128, 8, 8, DEVICE_CPU);              // -> (16,16,128)
+    ae->dec_conv2 = conv2d_create(128, 256, 3, 1, 1, 16, 16, DEVICE_CPU);   // -> (16,16,256)
+    ae->dec_up2 = upsample2d_create(2, 256, 16, 16, DEVICE_CPU);            // -> (32,32,256)
+    ae->dec_conv3 = conv2d_create(256, 3, 3, 1, 1, 32, 32, DEVICE_CPU);     // -> (32,32,3)
     printf("  ✓ Conv2D(128->128) + UpSample -> (16,16,128)\n");
     printf("  ✓ Conv2D(128->256) + UpSample -> (32,32,256)\n");
     printf("  ✓ Conv2D(256->3) -> (32,32,3) [OUTPUT]\n");
@@ -77,7 +77,7 @@ Autoencoder* autoencoder_create(float learning_rate, int batch_size, int num_epo
 }
 
 // Free autoencoder
-void autoencoder_free(Autoencoder* ae) {
+void autoencoder_cpu_free(Autoencoder_CPU* ae) {
     if (!ae) return;
 
     // Free layers
@@ -117,7 +117,7 @@ void autoencoder_free(Autoencoder* ae) {
 }
 
 // Forward pass
-void autoencoder_forward(Autoencoder* ae, const float* input, int batch_size) {
+void autoencoder_cpu_forward(Autoencoder_CPU* ae, const float* input, int batch_size) {
     // ENCODER
     // Conv1 + ReLU: (batch, 3, 32, 32) -> (batch, 256, 32, 32)
     conv2d_forward_cpu(ae->enc_conv1, input, ae->enc1_out, batch_size);
@@ -153,7 +153,7 @@ void autoencoder_forward(Autoencoder* ae, const float* input, int batch_size) {
 }
 
 // Backward pass
-void autoencoder_backward(Autoencoder* ae, const float* input, const float* target, int batch_size) {
+void autoencoder_cpu_backward(Autoencoder_CPU* ae, const float* input, const float* target, int batch_size) {
     int output_size = batch_size * 3 * 32 * 32;
 
     // Compute loss gradient
@@ -210,7 +210,7 @@ static void update_conv_weights(Conv2DLayer* layer, float lr) {
 }
 
 // Update weights using gradients
-void autoencoder_update_weights(Autoencoder* ae) {
+void autoencoder_cpu_update_weights(Autoencoder_CPU* ae) {
     float lr = ae->learning_rate;
 
     update_conv_weights(ae->enc_conv1, lr);
@@ -221,7 +221,7 @@ void autoencoder_update_weights(Autoencoder* ae) {
 }
 
 // Train for one epoch
-float autoencoder_train_epoch(Autoencoder* ae, float* train_data, int num_samples, int verbose) {
+float autoencoder_cpu_train_epoch(Autoencoder_CPU* ae, float* train_data, int num_samples, int verbose) {
     int batch_size = ae->batch_size;
     int num_batches = (num_samples + batch_size - 1) / batch_size;
     float total_loss = 0.0f;
@@ -236,17 +236,17 @@ float autoencoder_train_epoch(Autoencoder* ae, float* train_data, int num_sample
         float* batch_data = &train_data[start_idx * 3 * 32 * 32];
 
         // Forward pass
-        autoencoder_forward(ae, batch_data, actual_batch_size);
+        autoencoder_cpu_forward(ae, batch_data, actual_batch_size);
 
         // Compute loss
         float batch_loss = mse_loss_cpu(ae->output, batch_data, actual_batch_size * 3 * 32 * 32);
         total_loss += batch_loss;
 
         // Backward pass
-        autoencoder_backward(ae, batch_data, batch_data, actual_batch_size);
+        autoencoder_cpu_backward(ae, batch_data, batch_data, actual_batch_size);
 
         // Update weights
-        autoencoder_update_weights(ae);
+        autoencoder_cpu_update_weights(ae);
 
         if (verbose >= 2 && batch_idx % 100 == 0) {
             printf("    Batch %d/%d, Loss: %.6f\r", batch_idx + 1, num_batches, batch_loss);
@@ -258,7 +258,7 @@ float autoencoder_train_epoch(Autoencoder* ae, float* train_data, int num_sample
 }
 
 // Extract latent representation
-void autoencoder_encode(Autoencoder* ae, const float* input, float* latent_out, int batch_size) {
+void autoencoder_cpu_encode(Autoencoder_CPU* ae, const float* input, float* latent_out, int batch_size) {
     // Run encoder only
     conv2d_forward_cpu(ae->enc_conv1, input, ae->enc1_out, batch_size);
     relu_forward_cpu(ae->enc1_out, batch_size * 256 * 32 * 32);
@@ -269,7 +269,7 @@ void autoencoder_encode(Autoencoder* ae, const float* input, float* latent_out, 
 }
 
 // Print model summary
-void autoencoder_print_summary(Autoencoder* ae) {
+void autoencoder_cpu_print_summary(Autoencoder_CPU* ae) {
     printf("\n╔════════════════════════════════════════════════╗\n");
     printf("║          Autoencoder Model Summary            ║\n");
     printf("╚════════════════════════════════════════════════╝\n\n");
@@ -322,7 +322,7 @@ static void load_conv_layer(FILE* f, Conv2DLayer* layer) {
 }
 
 // Save model weights
-int autoencoder_save_weights(Autoencoder* ae, const char* filename) {
+int autoencoder_cpu_save_weights(Autoencoder_CPU* ae, const char* filename) {
     printf("Saving model weights to %s...\n", filename);
     FILE* f = fopen(filename, "wb");
     if (!f) return -1;
@@ -339,7 +339,7 @@ int autoencoder_save_weights(Autoencoder* ae, const char* filename) {
 }
 
 // Load model weights
-int autoencoder_load_weights(Autoencoder* ae, const char* filename) {
+int autoencoder_cpu_load_weights(Autoencoder_CPU* ae, const char* filename) {
     printf("Loading model weights from %s...\n", filename);
     FILE* f = fopen(filename, "rb");
     if (!f) return -1;
