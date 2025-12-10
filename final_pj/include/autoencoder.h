@@ -1,79 +1,49 @@
-#ifndef AUTOENCODER_H
-#define AUTOENCODER_H
+#pragma once
 
-#include "layers.h"
-#include "config.h"
-#include "device.h"
+#include "cpu_layers.h"
+#include <string>
+#include <vector>
 
-// Autoencoder architecture
-typedef struct {
-    // Encoder layers
-    Conv2DLayer* enc_conv1;     // 3 -> 256, (32,32,3) -> (32,32,256)
-    MaxPool2DLayer* enc_pool1;  // -> (16,16,256)
-    Conv2DLayer* enc_conv2;     // 256 -> 128, -> (16,16,128)
-    MaxPool2DLayer* enc_pool2;  // -> (8,8,128) LATENT
+class Autoencoder
+{
+public:
+    // encoder
+    Conv2D *enc_conv1; // 3 -> 256, 3x3
+    ReLU *enc_relu1;
+    MaxPool2D *enc_pool1;
+    Conv2D *enc_conv2; // 256 -> 128
+    ReLU *enc_relu2;
+    MaxPool2D *enc_pool2;
 
-    // Decoder layers
-    Conv2DLayer* dec_conv1;     // 128 -> 128, (8,8,128) -> (8,8,128)
-    UpSample2DLayer* dec_up1;   // -> (16,16,128)
-    Conv2DLayer* dec_conv2;     // 128 -> 256, -> (16,16,256)
-    UpSample2DLayer* dec_up2;   // -> (32,32,256)
-    Conv2DLayer* dec_conv3;     // 256 -> 3, -> (32,32,3)
+    // decoder
+    Conv2D *dec_conv1; // 128 -> 128
+    ReLU *dec_relu1;
+    UpSample2D *dec_up1;
+    Conv2D *dec_conv2; // 128 -> 256
+    ReLU *dec_relu2;
+    UpSample2D *dec_up2;
+    Conv2D *dec_conv3; // 256 -> 3
 
-    // Training parameters
-    float learning_rate;
-    int batch_size;
-    int num_epochs;
+    MSELoss *loss;
 
-    // Activations for forward pass
-    float* enc1_out;      // (batch, 256, 32, 32)
-    float* pool1_out;     // (batch, 256, 16, 16)
-    float* enc2_out;      // (batch, 128, 16, 16)
-    float* latent;        // (batch, 128, 8, 8) - encoded representation
-    float* dec1_out;      // (batch, 128, 8, 8)
-    float* up1_out;       // (batch, 128, 16, 16)
-    float* dec2_out;      // (batch, 256, 16, 16)
-    float* up2_out;       // (batch, 256, 32, 32)
-    float* output;        // (batch, 3, 32, 32)
+    // buffers allocated per max batch
+    int max_batch_size;
+    std::vector<float> buffers; // large contiguous buffer for activations
+    std::vector<int> pool1_indices;
+    std::vector<int> pool2_indices;
 
-    // Gradients for backward pass
-    float* d_output;
-    float* d_up2_out;
-    float* d_dec2_out;
-    float* d_up1_out;
-    float* d_dec1_out;
-    float* d_latent;
-    float* d_enc2_out;
-    float* d_pool1_out;
-    float* d_enc1_out;
+    Autoencoder(int max_batch = 64);
+    ~Autoencoder();
 
-    DeviceType device;
-} Autoencoder_CPU;
+    // Forward: returns loss
+    float forward(const float *input, int batch_size);
+    void backward(const float *input, int batch_size);
+    void updateWeights(float learning_rate);
 
-// Create and initialize autoencoder
-Autoencoder_CPU* autoencoder_cpu_create(float learning_rate, int batch_size, int num_epochs);
-void autoencoder_cpu_free(Autoencoder_CPU* ae);
+    // Extract features (encoder only) - features in row-major per image, size 8192
+    void extractFeatures(const float *input, float *features, int num_images);
 
-// Forward pass: input (batch, 3, 32, 32) -> output (batch, 3, 32, 32)
-void autoencoder_cpu_forward(Autoencoder_CPU* ae, const float* input, int batch_size);
-
-// Backward pass: compute gradients
-void autoencoder_cpu_backward(Autoencoder_CPU* ae, const float* input, const float* target, int batch_size);
-
-// Update weights using computed gradients
-void autoencoder_cpu_update_weights(Autoencoder_CPU* ae);
-
-// Extract latent representation (encoder only)
-void autoencoder_cpu_encode(Autoencoder_CPU* ae, const float* input, float* latent_out, int batch_size);
-
-// Training function
-float autoencoder_cpu_train_epoch(Autoencoder_CPU* ae, float* train_data, int num_samples, int verbose);
-
-// Save/Load model
-int autoencoder_cpu_save_weights(Autoencoder_CPU* ae, const char* filename);
-int autoencoder_cpu_load_weights(Autoencoder_CPU* ae, const char* filename);
-
-// Print model summary
-void autoencoder_cpu_print_summary(Autoencoder_CPU* ae);
-
-#endif // AUTOENCODER_H
+    // Save/load weights
+    bool saveWeights(const std::string &filename);
+    bool loadWeights(const std::string &filename);
+};
