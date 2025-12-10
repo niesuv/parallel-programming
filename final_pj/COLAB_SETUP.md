@@ -35,13 +35,12 @@ drive.mount('/content/drive')
 # Navigate to project directory
 %cd /content/final_pj
 
-# Build
+# Build (permissions are automatically set by Makefile)
 !make clean
 !make
-
-# Fix permissions (IMPORTANT for Colab!)
-!chmod +x bin/*
 ```
+
+**Note:** The Makefile now automatically sets execute permissions on all binaries, so `chmod` is no longer needed!
 
 ### 5. Quick Test
 
@@ -88,7 +87,6 @@ uploaded = files.upload()  # Upload your final_pj.zip
 # Cell 4: Build
 !make clean
 !make
-!chmod +x bin/*
 
 # Cell 5: Verify build
 !ls -lh bin/
@@ -112,12 +110,12 @@ files.download('autoencoder_benchmark_cpu.txt')
 ## Troubleshooting
 
 ### Permission Denied Error
-```bash
-# Fix: Add execute permissions
-!chmod +x bin/*
+**This should no longer happen!** The Makefile automatically sets execute permissions.
 
-# Or rebuild
-!make clean && make && chmod +x bin/*
+If you still see this error:
+```bash
+# Rebuild
+!make clean && make
 ```
 
 ### "Command not found"
@@ -198,6 +196,6 @@ Expected GPU speedup: **50-100x faster!**
 
 **TL;DR Quick Commands:**
 ```bash
-!make clean && make && chmod +x bin/*
+!make clean && make
 !./bin/train_autoencoder ./cifar-10-batches-bin --num-samples 500 --epochs 2
 ```

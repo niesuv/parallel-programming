@@ -71,80 +71,80 @@ dirs:
 	@mkdir -p $(BIN_DIR)
 
 # Build test_cifar10 (basic CPU-only test) - now needs COMMON_OBJ for device functions
-$(TEST_CIFAR10): $(TEST_DIR)/test_cifar10.c $(COMMON_OBJ)
+$(TEST_CIFAR10): $(TEST_DIR)/test_cifar10.c $(COMMON_OBJ) | dirs
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	@chmod +x $@
 	@echo "Built: $@"
 
 # Build test_device_compare (CPU-only version)
-$(TEST_DEVICE_COMPARE): $(TEST_DIR)/test_device_compare.c $(COMMON_OBJ)
+$(TEST_DEVICE_COMPARE): $(TEST_DIR)/test_device_compare.c $(COMMON_OBJ) | dirs
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	@chmod +x $@
 	@echo "Built: $@ (CPU-only)"
 
 # Build test_device_compare (CUDA version)
 ifdef CUDA_AVAILABLE
-$(TEST_DEVICE_COMPARE_CUDA): $(TEST_DIR)/test_device_compare.c $(COMMON_OBJ_CUDA) $(CUDA_OBJ)
+$(TEST_DEVICE_COMPARE_CUDA): $(TEST_DIR)/test_device_compare.c $(COMMON_OBJ_CUDA) $(CUDA_OBJ) | dirs
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(LDFLAGS) $(CUDA_LDFLAGS)
 	@chmod +x $@
 	@echo "Built: $@ (with CUDA)"
 endif
 
 # Build train_autoencoder
-$(TRAIN_AUTOENCODER): $(TEST_DIR)/train_autoencoder.c $(COMMON_OBJ) $(AUTOENCODER_OBJ)
+$(TRAIN_AUTOENCODER): $(TEST_DIR)/train_autoencoder.c $(COMMON_OBJ) $(AUTOENCODER_OBJ) | dirs
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	@chmod +x $@
 	@echo "Built: $@"
 
 # Build test_conv2d_simple
-$(TEST_CONV2D): $(TEST_DIR)/test_conv2d_simple.c $(COMMON_OBJ) $(AUTOENCODER_OBJ)
+$(TEST_CONV2D): $(TEST_DIR)/test_conv2d_simple.c $(COMMON_OBJ) $(AUTOENCODER_OBJ) | dirs
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 	@chmod +x $@
 	@echo "Built: $@"
 
 # Compile data source files
-$(BUILD_DIR)/cifar10.o: $(DATA_DIR)/cifar10.c $(INCLUDE_DIR)/cifar10.h $(INCLUDE_DIR)/config.h $(INCLUDE_DIR)/device.h
+$(BUILD_DIR)/cifar10.o: $(DATA_DIR)/cifar10.c $(INCLUDE_DIR)/cifar10.h $(INCLUDE_DIR)/config.h $(INCLUDE_DIR)/device.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Compile CPU source files (layers and autoencoder)
-$(BUILD_DIR)/conv2d_cpu.o: $(CPU_DIR)/conv2d_cpu.c $(INCLUDE_DIR)/layers.h
+$(BUILD_DIR)/conv2d_cpu.o: $(CPU_DIR)/conv2d_cpu.c $(INCLUDE_DIR)/layers.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/relu_cpu.o: $(CPU_DIR)/relu_cpu.c $(INCLUDE_DIR)/layers.h
+$(BUILD_DIR)/relu_cpu.o: $(CPU_DIR)/relu_cpu.c $(INCLUDE_DIR)/layers.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/maxpool_cpu.o: $(CPU_DIR)/maxpool_cpu.c $(INCLUDE_DIR)/layers.h
+$(BUILD_DIR)/maxpool_cpu.o: $(CPU_DIR)/maxpool_cpu.c $(INCLUDE_DIR)/layers.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/upsample_cpu.o: $(CPU_DIR)/upsample_cpu.c $(INCLUDE_DIR)/layers.h
+$(BUILD_DIR)/upsample_cpu.o: $(CPU_DIR)/upsample_cpu.c $(INCLUDE_DIR)/layers.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/loss_cpu.o: $(CPU_DIR)/loss_cpu.c $(INCLUDE_DIR)/layers.h
+$(BUILD_DIR)/loss_cpu.o: $(CPU_DIR)/loss_cpu.c $(INCLUDE_DIR)/layers.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/autoencoder.o: $(CPU_DIR)/autoencoder.c $(INCLUDE_DIR)/autoencoder.h $(INCLUDE_DIR)/layers.h
+$(BUILD_DIR)/autoencoder.o: $(CPU_DIR)/autoencoder.c $(INCLUDE_DIR)/autoencoder.h $(INCLUDE_DIR)/layers.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Compile CUDA source files (if CUDA is available)
 ifdef CUDA_AVAILABLE
-$(BUILD_DIR)/device_cuda.o: $(CUDA_DIR)/device_cuda.cu $(INCLUDE_DIR)/device.h
+$(BUILD_DIR)/device_cuda.o: $(CUDA_DIR)/device_cuda.cu $(INCLUDE_DIR)/device.h | dirs
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 endif
 
 # Compile utility source files
-$(BUILD_DIR)/config.o: $(UTILS_DIR)/config.c $(INCLUDE_DIR)/config.h
+$(BUILD_DIR)/config.o: $(UTILS_DIR)/config.c $(INCLUDE_DIR)/config.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/device.o: $(UTILS_DIR)/device.c $(INCLUDE_DIR)/device.h $(INCLUDE_DIR)/config.h
+$(BUILD_DIR)/device.o: $(UTILS_DIR)/device.c $(INCLUDE_DIR)/device.h $(INCLUDE_DIR)/config.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Compile device.o with CUDA support (for CUDA executables)
 ifdef CUDA_AVAILABLE
-$(BUILD_DIR)/device_cuda_enabled.o: $(UTILS_DIR)/device.c $(INCLUDE_DIR)/device.h $(INCLUDE_DIR)/config.h
+$(BUILD_DIR)/device_cuda_enabled.o: $(UTILS_DIR)/device.c $(INCLUDE_DIR)/device.h $(INCLUDE_DIR)/config.h | dirs
 	$(CC) $(CFLAGS) -D__NVCC__ -c $< -o $@
 endif
 
-$(BUILD_DIR)/benchmark.o: $(UTILS_DIR)/benchmark.c $(INCLUDE_DIR)/benchmark.h $(INCLUDE_DIR)/config.h
+$(BUILD_DIR)/benchmark.o: $(UTILS_DIR)/benchmark.c $(INCLUDE_DIR)/benchmark.h $(INCLUDE_DIR)/config.h | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Clean build artifacts

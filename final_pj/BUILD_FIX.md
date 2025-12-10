@@ -158,6 +158,40 @@ $ ls -lh bin/
 
 All executables have proper permissions and link correctly.
 
+## Additional Fix 3: Colab "No rule to make target" Error
+
+When running `make clean` followed by `make` on Google Colab, the build would fail:
+
+```
+make: *** No rule to make target 'src/data/cifar10.c', needed by 'build/cifar10.o'.  Stop.
+```
+
+**Root Cause:**
+The `make clean` command removes the `build` and `bin` directories. However, the compilation rules tried to create object files in `build/` without ensuring the directory exists first.
+
+**Solution:**
+Added **order-only prerequisites** (`| dirs`) to all compilation and linking rules:
+
+```makefile
+# Object files depend on dirs existing (but don't rebuild if dirs changes)
+$(BUILD_DIR)/cifar10.o: $(DATA_DIR)/cifar10.c $(INCLUDE_DIR)/cifar10.h | dirs
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/conv2d_cpu.o: $(CPU_DIR)/conv2d_cpu.c $(INCLUDE_DIR)/layers.h | dirs
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Executables also depend on dirs
+$(TRAIN_AUTOENCODER): $(TEST_DIR)/train_autoencoder.c $(COMMON_OBJ) $(AUTOENCODER_OBJ) | dirs
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	@chmod +x $@
+```
+
+The `| dirs` syntax means:
+- **Require `dirs` target to run first** (creates build/ and bin/ directories)
+- **Don't rebuild** if dirs timestamp changes (order-only prerequisite)
+
+This ensures `mkdir -p build bin` runs before any compilation, fixing the Colab issue.
+
 ## Summary
 
 - ✅ CPU-only executables build without CUDA dependencies
@@ -165,6 +199,8 @@ All executables have proper permissions and link correctly.
 - ✅ Proper separation of CPU/CUDA code paths
 - ✅ M_PI constant defined for cross-platform compatibility
 - ✅ Execute permissions set automatically for Colab
+- ✅ Directories created automatically before compilation
+- ✅ Works reliably after `make clean` on all platforms
 - ✅ No breaking changes to existing functionality
 
-All build issues resolved. The project now compiles cleanly on all platforms!
+All build issues resolved. The project now compiles cleanly on all platforms, including Google Colab!
