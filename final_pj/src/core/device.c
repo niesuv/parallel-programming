@@ -37,14 +37,14 @@ void device_cleanup(DeviceType device) {
 
 int device_is_available(DeviceType device) {
     if (device == DEVICE_CPU) {
-        return 1;  // CPU always available
+        return 1;
     }
     else if (device == DEVICE_CUDA) {
 #ifdef __NVCC__
         extern int cuda_device_is_available(void);
         return cuda_device_is_available();
 #else
-        return 0;  // CUDA not compiled
+        return 0;
 #endif
     }
     return 0;

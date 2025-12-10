@@ -91,7 +91,10 @@ $(TEST_DEVICE_COMPARE): $(TEST_DIR)/test_device_compare.c $(COMMON_OBJ) | dirs
 
 # Build test_device_compare (CUDA version)
 ifdef CUDA_AVAILABLE
-$(TEST_DEVICE_COMPARE_CUDA): $(TEST_DIR)/test_device_compare.c $(COMMON_OBJ_CUDA) $(CUDA_OBJ) | dirs
+$(BUILD_DIR)/test_device_compare_cuda.o: $(TEST_DIR)/test_device_compare.c | dirs
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+$(TEST_DEVICE_COMPARE_CUDA): $(BUILD_DIR)/test_device_compare_cuda.o $(COMMON_OBJ_CUDA) $(CUDA_OBJ) | dirs
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(LDFLAGS) $(CUDA_LDFLAGS)
 	@chmod +x $@
 	@echo "Built: $@ (with CUDA)"
