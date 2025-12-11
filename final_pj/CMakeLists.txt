@@ -36,12 +36,12 @@ target_include_directories(gpu_autoencoder PUBLIC ${PROJECT_SOURCE_DIR}/include)
 # GPU training executable
 add_executable(train_gpu src/train_gpu.cu)
 set_target_properties(train_gpu PROPERTIES LANGUAGE CUDA)
-target_link_libraries(train_gpu gpu_autoencoder data_loader)
+target_link_libraries(train_gpu gpu_autoencoder cpu_autoencoder data_loader cpu_layers)
 
 # Feature extraction executable
 add_executable(extract_features src/feature_extraction.cu)
 set_target_properties(extract_features PROPERTIES LANGUAGE CUDA)
-target_link_libraries(extract_features gpu_autoencoder data_loader)
+target_link_libraries(extract_features gpu_autoencoder cpu_autoencoder data_loader cpu_layers)
 
 # SVM classifier executable (requires LIBSVM)
 find_path(LIBSVM_INCLUDE_DIR svm.h HINTS /usr/local/include /opt/local/include)
@@ -50,7 +50,7 @@ find_library(LIBSVM_LIB svm HINTS /usr/local/lib /opt/local/lib)
 if(LIBSVM_INCLUDE_DIR AND LIBSVM_LIB)
     add_executable(svm_classifier src/svm_classifier.cpp)
     target_include_directories(svm_classifier PRIVATE ${LIBSVM_INCLUDE_DIR})
-    target_link_libraries(svm_classifier ${LIBSVM_LIB} data_loader)
+    target_link_libraries(svm_classifier ${LIBSVM_LIB} data_loader cpu_autoencoder cpu_layers)
     message(STATUS "LIBSVM found: ${LIBSVM_LIB}")
 else()
     message(WARNING "LIBSVM not found - SVM classifier will not be built")
