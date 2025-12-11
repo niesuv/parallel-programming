@@ -1,45 +1,59 @@
-#include "../include/autoencoder.h"
+#include "autoencoder.h"
+#include <iostream>
 #include <cstring>
 #include <fstream>
-#include <iostream>
 
 Autoencoder::Autoencoder(int max_batch) : max_batch_size(max_batch)
 {
-    // Create layers per architecture
-    enc_conv1 = new Conv2D(3, 256, 3, 1, 1, 32, 32);
+    // Encoder
+    enc_conv1 = new Conv2D(3, 256, 3, 1, 1); // 32x32 -> 32x32
     enc_relu1 = new ReLU();
-    enc_pool1 = new MaxPool2D(2, 2);
-    enc_conv2 = new Conv2D(256, 128, 3, 1, 1, 16, 16);
+    enc_pool1 = new MaxPool2D(2, 2);           // 32x32 -> 16x16
+    enc_conv2 = new Conv2D(256, 128, 3, 1, 1); // 16x16 -> 16x16
     enc_relu2 = new ReLU();
-    enc_pool2 = new MaxPool2D(2, 2);
+    enc_pool2 = new MaxPool2D(2, 2); // 16x16 -> 8x8
 
-    dec_conv1 = new Conv2D(128, 128, 3, 1, 1, 8, 8);
+    // Decoder
+    dec_conv1 = new Conv2D(128, 128, 3, 1, 1); // 8x8 -> 8x8
     dec_relu1 = new ReLU();
-    dec_up1 = new UpSample2D(2);
-    dec_conv2 = new Conv2D(128, 256, 3, 1, 1, 16, 16);
+    dec_up1 = new UpSample2D(2, UpSample2D::NEAREST); // 8x8 -> 16x16
+    dec_conv2 = new Conv2D(128, 256, 3, 1, 1);        // 16x16 -> 16x16
     dec_relu2 = new ReLU();
-    dec_up2 = new UpSample2D(2);
-    dec_conv3 = new Conv2D(256, 3, 3, 1, 1, 32, 32);
+    dec_up2 = new UpSample2D(2, UpSample2D::NEAREST); // 16x16 -> 32x32
+    dec_conv3 = new Conv2D(256, 3, 3, 1, 1);          // 32x32 -> 32x32
 
     loss = new MSELoss();
 
-    // allocate activation buffers for maximum batch
-    int max_input = max_batch * 3 * 32 * 32;
-    int max_enc1 = max_batch * 256 * 32 * 32;
-    int max_pool1 = max_batch * 256 * 16 * 16;
-    int max_enc2 = max_batch * 128 * 16 * 16;
-    int max_latent = max_batch * 128 * 8 * 8;
-    int max_dec1 = max_latent;
-    int max_up1 = max_batch * 128 * 16 * 16;
-    int max_dec2 = max_up1 * 1; // 256 channels after conv
-    int max_up2 = max_batch * 256 * 32 * 32;
-    int max_recon = max_batch * 3 * 32 * 32;
+    // Allocate activation buffers
+    enc_conv1_out = new float[max_batch * 256 * 32 * 32];
+    enc_relu1_out = new float[max_batch * 256 * 32 * 32];
+    enc_pool1_out = new float[max_batch * 256 * 16 * 16];
+    enc_conv2_out = new float[max_batch * 128 * 16 * 16];
+    enc_relu2_out = new float[max_batch * 128 * 16 * 16];
+    latent = new float[max_batch * 128 * 8 * 8];
+    dec_conv1_out = new float[max_batch * 128 * 8 * 8];
+    dec_relu1_out = new float[max_batch * 128 * 8 * 8];
+    dec_up1_out = new float[max_batch * 128 * 16 * 16];
+    dec_conv2_out = new float[max_batch * 256 * 16 * 16];
+    dec_relu2_out = new float[max_batch * 256 * 16 * 16];
+    dec_up2_out = new float[max_batch * 256 * 32 * 32];
+    reconstruction = new float[max_batch * 3 * 32 * 32];
 
-    size_t total = max_input + max_enc1 + max_pool1 + max_enc2 + max_latent + max_dec1 + max_up1 + max_dec2 + max_up2 + max_recon;
-    buffers.resize(total);
-
-    pool1_indices.resize(max_pool1);
-    pool2_indices.resize(max_latent);
+    // Allocate gradient buffers
+    recon_grad = new float[max_batch * 3 * 32 * 32];
+    dec_up2_grad = new float[max_batch * 256 * 32 * 32];
+    dec_relu2_grad = new float[max_batch * 256 * 16 * 16];
+    dec_conv2_grad = new float[max_batch * 128 * 16 * 16];
+    dec_up1_grad = new float[max_batch * 128 * 16 * 16];
+    dec_relu1_grad = new float[max_batch * 128 * 8 * 8];
+    dec_conv1_grad = new float[max_batch * 128 * 8 * 8];
+    latent_grad = new float[max_batch * 128 * 8 * 8];
+    enc_pool2_grad = new float[max_batch * 128 * 16 * 16];
+    enc_relu2_grad = new float[max_batch * 128 * 16 * 16];
+    enc_conv2_grad = new float[max_batch * 256 * 16 * 16];
+    enc_pool1_grad = new float[max_batch * 256 * 16 * 16];
+    enc_relu1_grad = new float[max_batch * 256 * 32 * 32];
+    enc_conv1_grad = new float[max_batch * 3 * 32 * 32];
 }
 
 Autoencoder::~Autoencoder()
@@ -58,147 +72,108 @@ Autoencoder::~Autoencoder()
     delete dec_up2;
     delete dec_conv3;
     delete loss;
+
+    delete[] enc_conv1_out;
+    delete[] enc_relu1_out;
+    delete[] enc_pool1_out;
+    delete[] enc_conv2_out;
+    delete[] enc_relu2_out;
+    delete[] latent;
+    delete[] dec_conv1_out;
+    delete[] dec_relu1_out;
+    delete[] dec_up1_out;
+    delete[] dec_conv2_out;
+    delete[] dec_relu2_out;
+    delete[] dec_up2_out;
+    delete[] reconstruction;
+
+    delete[] recon_grad;
+    delete[] dec_up2_grad;
+    delete[] dec_relu2_grad;
+    delete[] dec_conv2_grad;
+    delete[] dec_up1_grad;
+    delete[] dec_relu1_grad;
+    delete[] dec_conv1_grad;
+    delete[] latent_grad;
+    delete[] enc_pool2_grad;
+    delete[] enc_relu2_grad;
+    delete[] enc_conv2_grad;
+    delete[] enc_pool1_grad;
+    delete[] enc_relu1_grad;
+    delete[] enc_conv1_grad;
 }
 
 float Autoencoder::forward(const float *input, int batch_size)
 {
-    // Layout pointers into buffers
-    size_t offset = 0;
-    float *in_buf = buffers.data() + offset;
-    offset += batch_size * 3 * 32 * 32;
-    float *enc1 = buffers.data() + offset;
-    offset += batch_size * 256 * 32 * 32;
-    float *enc1_relu = enc1; // reuse
-    float *pool1 = buffers.data() + offset;
-    offset += batch_size * 256 * 16 * 16;
-    float *enc2 = buffers.data() + offset;
-    offset += batch_size * 128 * 16 * 16;
-    float *enc2_relu = enc2;
-    float *latent = buffers.data() + offset;
-    offset += batch_size * 128 * 8 * 8;
-    float *dec1 = buffers.data() + offset;
-    offset += batch_size * 128 * 8 * 8;
-    float *up1 = buffers.data() + offset;
-    offset += batch_size * 128 * 16 * 16;
-    float *dec2 = buffers.data() + offset;
-    offset += batch_size * 256 * 16 * 16;
-    float *up2 = buffers.data() + offset;
-    offset += batch_size * 256 * 32 * 32;
-    float *recon = buffers.data() + offset;
-    offset += batch_size * 3 * 32 * 32;
-
-    // copy input into in_buf
-    memcpy(in_buf, input, sizeof(float) * batch_size * 3 * 32 * 32);
-
     // Encoder
-    enc_conv1->forward(in_buf, enc1, batch_size, 32, 32);
-    enc_relu1->forward(enc1, enc1_relu, batch_size * 256 * 32 * 32);
-    enc_pool1->forward(enc1_relu, pool1, pool1_indices.data(), batch_size, 256, 32, 32);
+    enc_conv1->forward(input, enc_conv1_out, batch_size);
+    enc_relu1->forward(enc_conv1_out, enc_relu1_out, batch_size * 256 * 32 * 32);
+    enc_pool1->forward(enc_relu1_out, enc_pool1_out, batch_size, 256, 32, 32);
 
-    enc_conv2->forward(pool1, enc2, batch_size, 16, 16);
-    enc_relu2->forward(enc2, enc2_relu, batch_size * 128 * 16 * 16);
-    enc_pool2->forward(enc2_relu, latent, pool2_indices.data(), batch_size, 128, 16, 16);
+    enc_conv2->forward(enc_pool1_out, enc_conv2_out, batch_size);
+    enc_relu2->forward(enc_conv2_out, enc_relu2_out, batch_size * 128 * 16 * 16);
+    enc_pool2->forward(enc_relu2_out, latent, batch_size, 128, 16, 16);
 
     // Decoder
-    dec_conv1->forward(latent, dec1, batch_size, 8, 8);
-    dec_relu1->forward(dec1, dec1, batch_size * 128 * 8 * 8);
-    dec_up1->forward(dec1, up1, batch_size, 128, 8, 8);
+    dec_conv1->forward(latent, dec_conv1_out, batch_size);
+    dec_relu1->forward(dec_conv1_out, dec_relu1_out, batch_size * 128 * 8 * 8);
+    dec_up1->forward(dec_relu1_out, dec_up1_out, batch_size, 128, 8, 8);
 
-    dec_conv2->forward(up1, dec2, batch_size, 16, 16);
-    dec_relu2->forward(dec2, dec2, batch_size * 256 * 16 * 16);
-    dec_up2->forward(dec2, up2, batch_size, 256, 16, 16);
+    dec_conv2->forward(dec_up1_out, dec_conv2_out, batch_size);
+    dec_relu2->forward(dec_conv2_out, dec_relu2_out, batch_size * 256 * 16 * 16);
+    dec_up2->forward(dec_relu2_out, dec_up2_out, batch_size, 256, 16, 16);
 
-    dec_conv3->forward(up2, recon, batch_size, 32, 32);
+    dec_conv3->forward(dec_up2_out, reconstruction, batch_size);
 
-    // loss
-    int size = batch_size * 3 * 32 * 32;
-    std::vector<float> grad(size);
-    float loss_val = loss->computeLoss(recon, in_buf, grad.data(), size);
-
-    // store gradient in place of recon's grad buffer for backward
-    // For simplicity, keep recon grad in buffers after recon (reuse part of buffers)
-    // We'll copy grad to the end of buffers (space exists)
-    // Here simply copy to recon (not safe if overwritten), so allocate temp on stack above
-
-    // Save gradient in a member temp? For simplicity, allocate temporary and store in a hidden vector
-    // Implemented in backward call by recomputing grad via MSELoss again to avoid storing now
+    // Compute loss
+    float loss_val = loss->computeLoss(reconstruction, input, recon_grad,
+                                       batch_size * 3 * 32 * 32);
 
     return loss_val;
 }
 
 void Autoencoder::backward(const float *input, int batch_size)
 {
-    // For simplicity, implement a basic backward propagation using stored buffers by re-running forward
-    // then computing gradients and calling layer backward functions.
-    // Layout pointers into buffers (same as forward)
-    size_t offset = 0;
-    float *in_buf = buffers.data() + offset;
-    offset += batch_size * 3 * 32 * 32;
-    float *enc1 = buffers.data() + offset;
-    offset += batch_size * 256 * 32 * 32;
-    float *pool1 = buffers.data() + offset;
-    offset += batch_size * 256 * 16 * 16;
-    float *enc2 = buffers.data() + offset;
-    offset += batch_size * 128 * 16 * 16;
-    float *latent = buffers.data() + offset;
-    offset += batch_size * 128 * 8 * 8;
-    float *dec1 = buffers.data() + offset;
-    offset += batch_size * 128 * 8 * 8;
-    float *up1 = buffers.data() + offset;
-    offset += batch_size * 128 * 16 * 16;
-    float *dec2 = buffers.data() + offset;
-    offset += batch_size * 256 * 16 * 16;
-    float *up2 = buffers.data() + offset;
-    offset += batch_size * 256 * 32 * 32;
-    float *recon = buffers.data() + offset;
-    offset += batch_size * 3 * 32 * 32;
+    // Backward through decoder
+    std::memset(dec_up2_grad, 0, batch_size * 256 * 32 * 32 * sizeof(float));
+    dec_conv3->backward(dec_up2_out, recon_grad, dec_up2_grad, batch_size);
 
-    // recompute recon and intermediate activations (call forward again but avoid double-copying input)
-    // In this simple implementation we'll call forward to ensure buffers filled
-    forward(input, batch_size);
+    std::memset(dec_relu2_grad, 0, batch_size * 256 * 16 * 16 * sizeof(float));
+    dec_up2->backward(dec_up2_grad, dec_relu2_grad, batch_size, 256, 16, 16);
 
-    int size = batch_size * 3 * 32 * 32;
-    std::vector<float> recon_grad(size);
-    loss->computeLoss(recon, in_buf, recon_grad.data(), size);
+    std::memset(dec_conv2_grad, 0, batch_size * 128 * 16 * 16 * sizeof(float));
+    dec_relu2->backward(dec_conv2_out, dec_relu2_grad, dec_conv2_grad, batch_size * 256 * 16 * 16);
 
-    // Backprop through decoder
-    // Allocate gradient buffers per layer
-    std::vector<float> grad_up2(batch_size * 256 * 32 * 32);
-    std::vector<float> grad_dec2(batch_size * 256 * 16 * 16);
-    std::vector<float> grad_up1(batch_size * 128 * 16 * 16);
-    std::vector<float> grad_dec1(batch_size * 128 * 8 * 8);
-    std::vector<float> grad_latent(batch_size * 128 * 8 * 8);
-    std::vector<float> grad_enc2(batch_size * 128 * 16 * 16);
-    std::vector<float> grad_pool1(batch_size * 256 * 16 * 16);
-    std::vector<float> grad_enc1(batch_size * 256 * 32 * 32);
-    std::vector<float> grad_input(batch_size * 3 * 32 * 32);
+    std::memset(dec_up1_grad, 0, batch_size * 128 * 16 * 16 * sizeof(float));
+    dec_conv2->backward(dec_up1_out, dec_conv2_grad, dec_up1_grad, batch_size);
 
-    // dec_conv3 backward: output is recon, output_grad is recon_grad
-    dec_conv3->backward(up2, recon_grad.data(), grad_up2.data(), batch_size, 32, 32);
+    std::memset(dec_relu1_grad, 0, batch_size * 128 * 8 * 8 * sizeof(float));
+    dec_up1->backward(dec_up1_grad, dec_relu1_grad, batch_size, 128, 8, 8);
 
-    // dec_up2 backward: grad_up2 -> grad_dec2
-    dec_up2->backward(grad_up2.data(), grad_dec2.data(), batch_size, 256, 16, 16);
+    std::memset(dec_conv1_grad, 0, batch_size * 128 * 8 * 8 * sizeof(float));
+    dec_relu1->backward(dec_conv1_out, dec_relu1_grad, dec_conv1_grad, batch_size * 128 * 8 * 8);
 
-    // dec_conv2 backward
-    dec_conv2->backward(up1, grad_dec2.data(), grad_up1.data(), batch_size, 16, 16);
+    std::memset(latent_grad, 0, batch_size * 128 * 8 * 8 * sizeof(float));
+    dec_conv1->backward(latent, dec_conv1_grad, latent_grad, batch_size);
 
-    // dec_up1 backward
-    dec_up1->backward(grad_up1.data(), grad_dec1.data(), batch_size, 128, 8, 8);
+    // Backward through encoder
+    std::memset(enc_pool2_grad, 0, batch_size * 128 * 16 * 16 * sizeof(float));
+    enc_pool2->backward(latent_grad, enc_pool2_grad, batch_size, 128, 8, 8);
 
-    // dec_conv1 backward
-    dec_conv1->backward(latent, grad_dec1.data(), grad_latent.data(), batch_size, 8, 8);
+    std::memset(enc_relu2_grad, 0, batch_size * 128 * 16 * 16 * sizeof(float));
+    enc_relu2->backward(enc_conv2_out, enc_pool2_grad, enc_relu2_grad, batch_size * 128 * 16 * 16);
 
-    // Encoder backwards: pool2 backward (maxpool)
-    enc_pool2->backward(grad_latent.data(), grad_enc2.data(), pool2_indices.data(), batch_size, 128, 8, 8, 16, 16);
+    std::memset(enc_conv2_grad, 0, batch_size * 256 * 16 * 16 * sizeof(float));
+    enc_conv2->backward(enc_pool1_out, enc_relu2_grad, enc_conv2_grad, batch_size);
 
-    enc_relu2->backward(enc2, grad_enc2.data(), grad_enc2.data(), batch_size * 128 * 16 * 16);
-    enc_conv2->backward(pool1, grad_enc2.data(), grad_pool1.data(), batch_size, 16, 16);
+    std::memset(enc_pool1_grad, 0, batch_size * 256 * 16 * 16 * sizeof(float));
+    enc_pool1->backward(enc_conv2_grad, enc_pool1_grad, batch_size, 256, 16, 16);
 
-    enc_pool1->backward(grad_pool1.data(), grad_enc1.data(), pool1_indices.data(), batch_size, 256, 16, 16, 32, 32);
-    enc_relu1->backward(enc1, grad_enc1.data(), grad_enc1.data(), batch_size * 256 * 32 * 32);
-    enc_conv1->backward(in_buf, grad_enc1.data(), grad_input.data(), batch_size, 32, 32);
+    std::memset(enc_relu1_grad, 0, batch_size * 256 * 32 * 32 * sizeof(float));
+    enc_relu1->backward(enc_conv1_out, enc_pool1_grad, enc_relu1_grad, batch_size * 256 * 32 * 32);
 
-    // Finally, grad_input holds gradients wrt input (unused). Weight grads are accumulated in conv layers.
+    std::memset(enc_conv1_grad, 0, batch_size * 3 * 32 * 32 * sizeof(float));
+    enc_conv1->backward(input, enc_relu1_grad, enc_conv1_grad, batch_size);
 }
 
 void Autoencoder::updateWeights(float learning_rate)
@@ -210,69 +185,95 @@ void Autoencoder::updateWeights(float learning_rate)
     dec_conv3->updateWeights(learning_rate);
 }
 
-void Autoencoder::extractFeatures(const float *input, float *features, int num_images)
+void Autoencoder::extractFeatures(const float *input, float *features, int num_images, int batch_size)
 {
-    // Process in batches of max_batch_size
-    int batch = max_batch_size;
-    int total = num_images;
-    int processed = 0;
-    while (processed < total)
+    int num_batches = (num_images + batch_size - 1) / batch_size;
+
+    for (int b = 0; b < num_batches; b++)
     {
-        int cur = std::min(batch, total - processed);
-        forward(input + processed * 3 * 32 * 32, cur);
-        // latent is located in buffers at known offset
-        size_t offset = 0;
-        offset += cur * 3 * 32 * 32;
-        offset += cur * 256 * 32 * 32;
-        offset += cur * 256 * 16 * 16;
-        offset += 0;                                                   // enc2
-        float *latent = buffers.data() + offset + cur * 128 * 16 * 16; // ensure correct offset calculation
-        // For simplicity compute features by copying latent (N,128,8,8) contiguous
-        int feat_size = 128 * 8 * 8;
-        for (int i = 0; i < cur; ++i)
-        {
-            memcpy(features + (processed + i) * feat_size, latent + i * feat_size, sizeof(float) * feat_size);
-        }
-        processed += cur;
+        int current_batch_size = std::min(batch_size, num_images - b * batch_size);
+
+        // Forward through encoder only
+        enc_conv1->forward(input + b * batch_size * 3 * 32 * 32, enc_conv1_out, current_batch_size);
+        enc_relu1->forward(enc_conv1_out, enc_relu1_out, current_batch_size * 256 * 32 * 32);
+        enc_pool1->forward(enc_relu1_out, enc_pool1_out, current_batch_size, 256, 32, 32);
+
+        enc_conv2->forward(enc_pool1_out, enc_conv2_out, current_batch_size);
+        enc_relu2->forward(enc_conv2_out, enc_relu2_out, current_batch_size * 128 * 16 * 16);
+        enc_pool2->forward(enc_relu2_out, latent, current_batch_size, 128, 16, 16);
+
+        // Copy latent features
+        std::memcpy(features + b * batch_size * 8192, latent,
+                    current_batch_size * 8192 * sizeof(float));
     }
 }
 
-bool Autoencoder::saveWeights(const std::string &filename)
+void Autoencoder::saveWeights(const std::string &filename)
 {
-    std::ofstream ofs(filename, std::ios::binary);
-    if (!ofs)
-        return false;
-    auto writeVec = [&](const std::vector<float> &v)
-    { ofs.write(reinterpret_cast<const char *>(v.data()), v.size() * sizeof(float)); };
-    writeVec(enc_conv1->weights);
-    writeVec(enc_conv1->bias);
-    writeVec(enc_conv2->weights);
-    writeVec(enc_conv2->bias);
-    writeVec(dec_conv1->weights);
-    writeVec(dec_conv1->bias);
-    writeVec(dec_conv2->weights);
-    writeVec(dec_conv2->bias);
-    writeVec(dec_conv3->weights);
-    writeVec(dec_conv3->bias);
-    return true;
+    std::ofstream file(filename, std::ios::binary);
+    if (!file)
+    {
+        std::cerr << "Cannot open file for saving: " << filename << std::endl;
+        return;
+    }
+
+    // Save encoder weights
+    int enc_conv1_size = 256 * 3 * 3 * 3;
+    file.write(reinterpret_cast<char *>(enc_conv1->getWeights()), enc_conv1_size * sizeof(float));
+    file.write(reinterpret_cast<char *>(enc_conv1->getBias()), 256 * sizeof(float));
+
+    int enc_conv2_size = 128 * 256 * 3 * 3;
+    file.write(reinterpret_cast<char *>(enc_conv2->getWeights()), enc_conv2_size * sizeof(float));
+    file.write(reinterpret_cast<char *>(enc_conv2->getBias()), 128 * sizeof(float));
+
+    // Save decoder weights
+    int dec_conv1_size = 128 * 128 * 3 * 3;
+    file.write(reinterpret_cast<char *>(dec_conv1->getWeights()), dec_conv1_size * sizeof(float));
+    file.write(reinterpret_cast<char *>(dec_conv1->getBias()), 128 * sizeof(float));
+
+    int dec_conv2_size = 256 * 128 * 3 * 3;
+    file.write(reinterpret_cast<char *>(dec_conv2->getWeights()), dec_conv2_size * sizeof(float));
+    file.write(reinterpret_cast<char *>(dec_conv2->getBias()), 256 * sizeof(float));
+
+    int dec_conv3_size = 3 * 256 * 3 * 3;
+    file.write(reinterpret_cast<char *>(dec_conv3->getWeights()), dec_conv3_size * sizeof(float));
+    file.write(reinterpret_cast<char *>(dec_conv3->getBias()), 3 * sizeof(float));
+
+    file.close();
+    std::cout << "Weights saved to " << filename << std::endl;
 }
 
-bool Autoencoder::loadWeights(const std::string &filename)
+void Autoencoder::loadWeights(const std::string &filename)
 {
-    std::ifstream ifs(filename, std::ios::binary);
-    if (!ifs)
-        return false;
-    auto readVec = [&](std::vector<float> &v)
-    { ifs.read(reinterpret_cast<char *>(v.data()), v.size() * sizeof(float)); };
-    readVec(enc_conv1->weights);
-    readVec(enc_conv1->bias);
-    readVec(enc_conv2->weights);
-    readVec(enc_conv2->bias);
-    readVec(dec_conv1->weights);
-    readVec(dec_conv1->bias);
-    readVec(dec_conv2->weights);
-    readVec(dec_conv2->bias);
-    readVec(dec_conv3->weights);
-    readVec(dec_conv3->bias);
-    return true;
+    std::ifstream file(filename, std::ios::binary);
+    if (!file)
+    {
+        std::cerr << "Cannot open file for loading: " << filename << std::endl;
+        return;
+    }
+
+    // Load encoder weights
+    int enc_conv1_size = 256 * 3 * 3 * 3;
+    file.read(reinterpret_cast<char *>(enc_conv1->getWeights()), enc_conv1_size * sizeof(float));
+    file.read(reinterpret_cast<char *>(enc_conv1->getBias()), 256 * sizeof(float));
+
+    int enc_conv2_size = 128 * 256 * 3 * 3;
+    file.read(reinterpret_cast<char *>(enc_conv2->getWeights()), enc_conv2_size * sizeof(float));
+    file.read(reinterpret_cast<char *>(enc_conv2->getBias()), 128 * sizeof(float));
+
+    // Load decoder weights
+    int dec_conv1_size = 128 * 128 * 3 * 3;
+    file.read(reinterpret_cast<char *>(dec_conv1->getWeights()), dec_conv1_size * sizeof(float));
+    file.read(reinterpret_cast<char *>(dec_conv1->getBias()), 128 * sizeof(float));
+
+    int dec_conv2_size = 256 * 128 * 3 * 3;
+    file.read(reinterpret_cast<char *>(dec_conv2->getWeights()), dec_conv2_size * sizeof(float));
+    file.read(reinterpret_cast<char *>(dec_conv2->getBias()), 256 * sizeof(float));
+
+    int dec_conv3_size = 3 * 256 * 3 * 3;
+    file.read(reinterpret_cast<char *>(dec_conv3->getWeights()), dec_conv3_size * sizeof(float));
+    file.read(reinterpret_cast<char *>(dec_conv3->getBias()), 3 * sizeof(float));
+
+    file.close();
+    std::cout << "Weights loaded from " << filename << std::endl;
 }

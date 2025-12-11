@@ -1,18 +1,20 @@
-#include "autoencoder.h"
+#include "gpu_autoencoder.h"
 #include "data_loader.h"
+#include "autoencoder.h"
 #include <iostream>
 #include <chrono>
 #include <cstring>
 #include <iomanip>
+#include <cuda_runtime.h>
 
-void trainAutoencoder(Autoencoder *model, CIFAR10Dataset *dataset,
-                      int epochs, int batch_size, float learning_rate,
-                      int num_train_samples = 50000)
+void trainGPU(GPUAutoencoder *gpu_model, Autoencoder *cpu_model,
+              CIFAR10Dataset *dataset, int epochs, int batch_size,
+              float learning_rate, int num_train_samples = 50000)
 {
     int effective_train_size = std::min(num_train_samples, 50000);
     int num_batches = effective_train_size / batch_size;
 
-    std::cout << "\n=== CPU Autoencoder Training ===" << std::endl;
+    std::cout << "\n=== GPU Autoencoder Training ===" << std::endl;
     std::cout << "Epochs: " << epochs << std::endl;
     std::cout << "Batch Size: " << batch_size << std::endl;
     std::cout << "Learning Rate: " << learning_rate << std::endl;
@@ -21,6 +23,20 @@ void trainAutoencoder(Autoencoder *model, CIFAR10Dataset *dataset,
     std::cout << "==============================\n"
               << std::endl;
 
+    // Copy CPU weights to GPU
+    std::cout << "Copying weights to GPU..." << std::endl;
+    gpu_model->copyWeightsToDevice(
+        cpu_model->enc_conv1->getWeights(), cpu_model->enc_conv1->getBias(),
+        cpu_model->enc_conv2->getWeights(), cpu_model->enc_conv2->getBias(),
+        cpu_model->dec_conv1->getWeights(), cpu_model->dec_conv1->getBias(),
+        cpu_model->dec_conv2->getWeights(), cpu_model->dec_conv2->getBias(),
+        cpu_model->dec_conv3->getWeights(), cpu_model->dec_conv3->getBias());
+
+    // Create CUDA events for timing
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
     auto training_start = std::chrono::high_resolution_clock::now();
 
     for (int epoch = 0; epoch < epochs; epoch++)
@@ -28,7 +44,7 @@ void trainAutoencoder(Autoencoder *model, CIFAR10Dataset *dataset,
         dataset->shuffle();
         float epoch_loss = 0.0f;
 
-        auto epoch_start = std::chrono::high_resolution_clock::now();
+        cudaEventRecord(start);
 
         for (int batch = 0; batch < num_batches; batch++)
         {
@@ -40,14 +56,14 @@ void trainAutoencoder(Autoencoder *model, CIFAR10Dataset *dataset,
             dataset->getBatch(batch, batch_size, batch_images, batch_labels);
 
             // Forward pass
-            float loss = model->forward(batch_images, batch_size);
+            float loss = gpu_model->forward(batch_images, batch_size);
             epoch_loss += loss;
 
             // Backward pass
-            model->backward(batch_images, batch_size);
+            gpu_model->backward(batch_images, batch_size);
 
             // Update weights
-            model->updateWeights(learning_rate);
+            gpu_model->updateWeights(learning_rate);
 
             delete[] batch_images;
             delete[] batch_labels;
@@ -61,14 +77,16 @@ void trainAutoencoder(Autoencoder *model, CIFAR10Dataset *dataset,
             }
         }
 
-        auto epoch_end = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::seconds>(
-                            epoch_end - epoch_start)
-                            .count();
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+
+        float milliseconds = 0;
+        cudaEventElapsedTime(&milliseconds, start, stop);
+        float epoch_time_sec = milliseconds / 1000.0f;
 
         float avg_loss = epoch_loss / num_batches;
-        std::cout << "Epoch " << std::setw(2) << epoch << " completed in " << std::setw(4) << duration
-                  << "s | Avg Loss: " << std::fixed << std::setprecision(6) << avg_loss << std::endl;
+        std::cout << "Epoch " << std::setw(2) << epoch << " completed in " << std::fixed << std::setprecision(2)
+                  << epoch_time_sec << "s | Avg Loss: " << std::setprecision(6) << avg_loss << std::endl;
     }
 
     auto training_end = std::chrono::high_resolution_clock::now();
@@ -76,21 +94,24 @@ void trainAutoencoder(Autoencoder *model, CIFAR10Dataset *dataset,
                           training_end - training_start)
                           .count();
 
-    std::cout << "\n=== Training Complete ===" << std::endl;
+    std::cout << "\n=== GPU Training Complete ===" << std::endl;
     std::cout << "Total Time: " << total_time << "s" << std::endl;
     std::cout << "Average Time/Epoch: " << total_time / epochs << "s" << std::endl;
-    std::cout << "=========================\n"
+    std::cout << "=============================\n"
               << std::endl;
 
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
     // Save weights
-    model->saveWeights("../build/autoencoder_cpu.weights");
+    gpu_model->saveWeights("../build/autoencoder_gpu.weights");
 }
 
 int main(int argc, char **argv)
 {
     // Default values
     int epochs = 20;
-    int batch_size = 32;
+    int batch_size = 64;
     float learning_rate = 0.001f;
     int num_train_samples = 50000;
     std::string data_dir = "./data/cifar-10-batches-bin";
@@ -122,7 +143,7 @@ int main(int argc, char **argv)
         {
             std::cout << "Usage: " << argv[0] << " [options]" << std::endl;
             std::cout << "  --epochs N            Number of training epochs (default: 20)" << std::endl;
-            std::cout << "  --batch-size N        Batch size (default: 32)" << std::endl;
+            std::cout << "  --batch-size N        Batch size (default: 64)" << std::endl;
             std::cout << "  --lr LR               Learning rate (default: 0.001)" << std::endl;
             std::cout << "  --num-samples N       Number of training samples (default: 50000)" << std::endl;
             std::cout << "  --data-dir PATH       Path to CIFAR-10 data directory" << std::endl;
@@ -148,11 +169,14 @@ int main(int argc, char **argv)
 
     dataset.normalize();
 
-    // Create autoencoder
-    Autoencoder model(batch_size);
+    // Create CPU autoencoder (for weight initialization)
+    Autoencoder cpu_model(batch_size);
 
-    // Train
-    trainAutoencoder(&model, &dataset, epochs, batch_size, learning_rate, num_train_samples);
+    // Create GPU autoencoder
+    GPUAutoencoder gpu_model(batch_size);
+
+    // Train on GPU
+    trainGPU(&gpu_model, &cpu_model, &dataset, epochs, batch_size, learning_rate, num_train_samples);
 
     return 0;
 }

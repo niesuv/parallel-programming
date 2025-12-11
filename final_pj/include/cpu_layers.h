@@ -1,67 +1,97 @@
 #pragma once
 
-#include <cstddef>
-#include <vector>
-
-// Naive CPU implementations of layers needed for the autoencoder.
+#include <cmath>
+#include <algorithm>
+#include <cstring>
 
 class Conv2D
 {
-public:
+private:
     int in_channels, out_channels, kernel_size;
+    int height, width;
     int padding, stride;
-    int in_h, in_w;             // dimensions of input feature maps
-    std::vector<float> weights; // [out_ch, in_ch, K, K]
-    std::vector<float> bias;    // [out_ch]
+    float *weights; // [out_ch, in_ch, K, K]
+    float *bias;    // [out_ch]
+    float *weight_grad;
+    float *bias_grad;
+    float *input_cache; // For backward pass
 
-    // gradients
-    std::vector<float> weight_grad;
-    std::vector<float> bias_grad;
+public:
+    Conv2D(int in_ch, int out_ch, int k, int pad, int str);
+    ~Conv2D();
 
-    Conv2D(int in_ch, int out_ch, int k, int pad = 1, int str = 1, int h = 0, int w = 0);
+    void forward(const float *input, float *output, int batch_size);
+    void backward(const float *input, const float *output_grad,
+                  float *input_grad, int batch_size);
+    void updateWeights(float learning_rate);
     void initializeWeights();
 
-    // Forward: input [N, C_in, H, W] -> output [N, C_out, H', W']
-    void forward(const float *input, float *output, int batch_size, int H, int W);
-
-    // Backward: given output_grad [N, C_out, H', W'] compute input_grad and accumulate weight/bias grads
-    void backward(const float *input, const float *output_grad, float *input_grad,
-                  int batch_size, int H, int W);
-
-    void updateWeights(float lr);
+    // Getters
+    int getOutChannels() const { return out_channels; }
+    int getOutHeight(int h) const { return (h + 2 * padding - kernel_size) / stride + 1; }
+    int getOutWidth(int w) const { return (w + 2 * padding - kernel_size) / stride + 1; }
+    float *getWeights() { return weights; }
+    float *getBias() { return bias; }
 };
 
 class ReLU
 {
 public:
+    ReLU() = default;
+    ~ReLU() = default;
+
     void forward(const float *input, float *output, int size);
-    void backward(const float *input, const float *output_grad, float *input_grad, int size);
+    void backward(const float *input, const float *output_grad,
+                  float *input_grad, int size);
 };
 
 class MaxPool2D
 {
-public:
+private:
     int pool_size, stride;
-    // store indices of max per forward call externally (caller provides buffer)
-    MaxPool2D(int pool_sz = 2, int str = 2);
-    void forward(const float *input, float *output, int *max_indices,
-                 int batch_size, int channels, int height, int width);
-    void backward(const float *output_grad, float *input_grad, const int *max_indices,
-                  int batch_size, int channels, int out_h, int out_w, int height, int width);
+    int *max_indices;
+    int allocated_size;
+
+public:
+    MaxPool2D(int pool_sz, int str);
+    ~MaxPool2D();
+
+    void forward(const float *input, float *output, int batch_size,
+                 int channels, int height, int width);
+    void backward(const float *output_grad, float *input_grad,
+                  int batch_size, int channels, int out_h, int out_w);
 };
 
 class UpSample2D
 {
+private:
+    int scale_factor;
+
 public:
-    int scale;
-    UpSample2D(int scale_factor = 2);
-    void forward(const float *input, float *output, int batch_size, int channels, int height, int width);
-    void backward(const float *output_grad, float *input_grad, int batch_size, int channels, int height, int width);
+    enum Method
+    {
+        NEAREST,
+        BILINEAR
+    };
+
+    UpSample2D(int scale, Method m = NEAREST);
+    ~UpSample2D();
+
+    void forward(const float *input, float *output, int batch_size,
+                 int channels, int height, int width);
+    void backward(const float *output_grad, float *input_grad,
+                  int batch_size, int channels, int height, int width);
+
+private:
+    Method method;
 };
 
 class MSELoss
 {
 public:
-    // computes loss and fills grad_output (size = N*C*H*W)
-    float computeLoss(const float *predicted, const float *target, float *grad_output, int size);
+    MSELoss() = default;
+    ~MSELoss() = default;
+
+    float computeLoss(const float *predicted, const float *target,
+                      float *grad_output, int size);
 };
