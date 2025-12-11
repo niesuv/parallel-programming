@@ -429,6 +429,9 @@ float GPUAutoencoder::forward(const float *h_input, int batch_size)
 {
     // Copy input to device
     CUDA_CHECK(cudaMemcpy(d_input, h_input, batch_size * 3 * 32 * 32 * sizeof(float), cudaMemcpyHostToDevice));
+
+    int threads = 256;
+
     // Encoder forward pass
     int enc_conv1_outputs = batch_size * 256 * 32 * 32;
     int blocks = (enc_conv1_outputs + threads - 1) / threads;
