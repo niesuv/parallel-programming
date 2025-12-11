@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cpu_layers.h"
+#include <string>
 
 class Autoencoder
 {
