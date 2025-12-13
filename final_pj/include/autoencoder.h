@@ -1,79 +1,76 @@
-#ifndef AUTOENCODER_H
-#define AUTOENCODER_H
+#pragma once
 
-#include "layers.h"
-#include "config.h"
-#include "device.h"
+#include "cpu_layers.h"
+#include <string>
 
-// Autoencoder architecture
-typedef struct {
-    // Encoder layers
-    Conv2DLayer* enc_conv1;     // 3 -> 256, (32,32,3) -> (32,32,256)
-    MaxPool2DLayer* enc_pool1;  // -> (16,16,256)
-    Conv2DLayer* enc_conv2;     // 256 -> 128, -> (16,16,128)
-    MaxPool2DLayer* enc_pool2;  // -> (8,8,128) LATENT
+class Autoencoder
+{
+private:
+    // Encoder layers - now public
+    ReLU *enc_relu1;
+    MaxPool2D *enc_pool1;
+    ReLU *enc_relu2;
+    MaxPool2D *enc_pool2;
 
-    // Decoder layers
-    Conv2DLayer* dec_conv1;     // 128 -> 128, (8,8,128) -> (8,8,128)
-    UpSample2DLayer* dec_up1;   // -> (16,16,128)
-    Conv2DLayer* dec_conv2;     // 128 -> 256, -> (16,16,256)
-    UpSample2DLayer* dec_up2;   // -> (32,32,256)
-    Conv2DLayer* dec_conv3;     // 256 -> 3, -> (32,32,3)
+    // Decoder layers - now public
+    ReLU *dec_relu1;
+    UpSample2D *dec_up1;
+    ReLU *dec_relu2;
+    UpSample2D *dec_up2;
 
-    // Training parameters
-    float learning_rate;
-    int batch_size;
-    int num_epochs;
+    // Loss
+    MSELoss *loss;
 
-    // Activations for forward pass
-    float* enc1_out;      // (batch, 256, 32, 32)
-    float* pool1_out;     // (batch, 256, 16, 16)
-    float* enc2_out;      // (batch, 128, 16, 16)
-    float* latent;        // (batch, 128, 8, 8) - encoded representation
-    float* dec1_out;      // (batch, 128, 8, 8)
-    float* up1_out;       // (batch, 128, 16, 16)
-    float* dec2_out;      // (batch, 256, 16, 16)
-    float* up2_out;       // (batch, 256, 32, 32)
-    float* output;        // (batch, 3, 32, 32)
+    // Activation buffers
+    float *enc_conv1_out;
+    float *enc_relu1_out;
+    float *enc_pool1_out;
+    float *enc_conv2_out;
+    float *enc_relu2_out;
+    float *latent;
+    float *dec_conv1_out;
+    float *dec_relu1_out;
+    float *dec_up1_out;
+    float *dec_conv2_out;
+    float *dec_relu2_out;
+    float *dec_up2_out;
+    float *reconstruction;
 
-    // Gradients for backward pass
-    float* d_output;
-    float* d_up2_out;
-    float* d_dec2_out;
-    float* d_up1_out;
-    float* d_dec1_out;
-    float* d_latent;
-    float* d_enc2_out;
-    float* d_pool1_out;
-    float* d_enc1_out;
+    // Gradient buffers
+    float *recon_grad;
+    float *dec_up2_grad;
+    float *dec_relu2_grad;
+    float *dec_conv2_grad;
+    float *dec_up1_grad;
+    float *dec_relu1_grad;
+    float *dec_conv1_grad;
+    float *latent_grad;
+    float *enc_pool2_grad;
+    float *enc_relu2_grad;
+    float *enc_conv2_grad;
+    float *enc_pool1_grad;
+    float *enc_relu1_grad;
+    float *enc_conv1_grad;
 
-    DeviceType device;
-} Autoencoder;
+    int max_batch_size;
 
-// Create and initialize autoencoder
-Autoencoder* autoencoder_create(float learning_rate, int batch_size, int num_epochs, DeviceType device);
-void autoencoder_free(Autoencoder* ae);
+public:
+    Autoencoder(int max_batch = 64);
+    ~Autoencoder();
 
-// Forward pass: input (batch, 3, 32, 32) -> output (batch, 3, 32, 32)
-void autoencoder_forward(Autoencoder* ae, const float* input, int batch_size);
+    float forward(const float *input, int batch_size);
+    void backward(const float *input, int batch_size);
+    void updateWeights(float learning_rate);
 
-// Backward pass: compute gradients
-void autoencoder_backward(Autoencoder* ae, const float* input, const float* target, int batch_size);
+    void extractFeatures(const float *input, float *features, int num_images, int batch_size = 64);
 
-// Update weights using computed gradients
-void autoencoder_update_weights(Autoencoder* ae);
+    void saveWeights(const std::string &filename);
+    void loadWeights(const std::string &filename);
 
-// Extract latent representation (encoder only)
-void autoencoder_encode(Autoencoder* ae, const float* input, float* latent_out, int batch_size);
-
-// Training function
-float autoencoder_train_epoch(Autoencoder* ae, float* train_data, int num_samples, int verbose);
-
-// Save/Load model
-int autoencoder_save_weights(Autoencoder* ae, const char* filename);
-int autoencoder_load_weights(Autoencoder* ae, const char* filename);
-
-// Print model summary
-void autoencoder_print_summary(Autoencoder* ae);
-
-#endif // AUTOENCODER_H
+    // Public access to layers for GPU training
+    Conv2D *enc_conv1;
+    Conv2D *enc_conv2;
+    Conv2D *dec_conv1;
+    Conv2D *dec_conv2;
+    Conv2D *dec_conv3;
+};

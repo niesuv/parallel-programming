@@ -1,327 +1,325 @@
-# CIFAR-10 Deep Learning Project in C/CUDA
+# CIFAR-10 Autoencoder with GPU Acceleration
 
-A high-performance deep learning implementation for CIFAR-10 classification using C and CUDA, with built-in CPU/GPU comparison capabilities.
+A high-performance implementation of a convolutional autoencoder for CIFAR-10 image reconstruction and feature extraction, with both CPU and GPU training support.
 
 ## Project Structure
 
 ```
 final_pj/
-├── include/              # Header files
-│   ├── cifar10.h        # CIFAR-10 data structures and API
-│   ├── config.h         # Configuration and device selection
-│   ├── device.h         # Device abstraction layer
-│   └── benchmark.h      # Benchmarking and comparison utilities
+├── include/
+│   ├── data_loader.h          # CIFAR-10 dataset loading
+│   ├── cpu_layers.h           # CPU layer implementations
+│   ├── autoencoder.h          # Autoencoder architecture
+│   └── gpu_autoencoder.h      # GPU autoencoder kernels
 ├── src/
-│   ├── data/            # Data loading and preprocessing
-│   │   └── cifar10.c
-│   ├── cpu/             # CPU implementations (future)
-│   ├── cuda/            # CUDA implementations
-│   │   └── device_cuda.cu
-│   └── utils/           # Utility functions
-│       ├── config.c
-│       ├── device.c
-│       └── benchmark.c
-├── test/                # Test programs
-│   ├── test_cifar10.c           # Basic data loading test
-│   └── test_device_compare.c   # CPU vs GPU comparison
-├── build/               # Build artifacts (generated)
-├── bin/                 # Executables (generated)
-├── Makefile             # Build system
-└── README.md
+│   ├── data_loader.cpp        # Dataset loading implementation
+│   ├── cpu_layers.cpp         # CPU layer implementations
+│   ├── autoencoder.cpp        # Autoencoder class
+│   ├── gpu_autoencoder.cu     # GPU kernels and implementation
+│   ├── train_cpu.cpp          # CPU training loop
+│   ├── train_gpu.cu           # GPU training loop
+│   ├── feature_extraction.cu  # Feature extraction (GPU)
+│   └── svm_classifier.cpp     # SVM classifier
+├── data/
+│   └── cifar-10-batches-bin/  # CIFAR-10 dataset
+├── build/                      # Build directory
+├── CMakeLists.txt             # CMake configuration
+└── README.md                  # This file
 ```
 
-## Features
+## Requirements
 
-### Phase 1: Data Pipeline ✅
+### Hardware
 
-- **CIFAR-10 Binary File Parser**
-  - Reads binary format: 1 byte label + 3072 bytes image
-  - Handles 5 training batches (50,000 images) + 1 test batch (10,000 images)
-  - Automatic memory management
+- NVIDIA GPU with CUDA Compute Capability 7.5+ (recommended: RTX series)
+- 8GB+ GPU memory (16GB recommended for batch size 128)
+- 8GB+ CPU RAM for dataset loading
 
-- **Data Preprocessing**
-  - Converts uint8 [0, 255] to float [0, 1] normalization
-  - Efficient memory layout for batch processing
+### Software
 
-- **Batch Generation**
-  - Configurable batch size
-  - Optional data shuffling using Fisher-Yates algorithm
-  - Efficient batch iteration with reset capability
+- CMake 3.20+
+- CUDA Toolkit 11.0+
+- C++17 compatible compiler
+- LIBSVM (optional, for SVM classification)
 
-### Device Management & Configuration ✅
-
-- **Device Abstraction Layer**
-  - Unified API for CPU and CUDA operations
-  - Automatic device detection
-  - Transparent memory management
-
-- **Configuration System**
-  - Easy device selection (CPU/CUDA)
-  - Configurable training parameters
-  - Runtime device switching
-
-- **Benchmark & Comparison Tools**
-  - Automatic performance measurement
-  - Side-by-side CPU vs GPU comparison
-  - Export results to files
-  - Pretty-printed comparison tables
-
-## Building
-
-### Prerequisites
-
-**For CPU-only:**
-```bash
-gcc (or any C11-compatible compiler)
-make
-```
-
-**For CUDA support:**
-```bash
-gcc
-make
-CUDA Toolkit (nvcc)
-NVIDIA GPU with compute capability >= 7.5
-```
-
-### Compile
+### macOS/Linux
 
 ```bash
-# Build everything (auto-detects CUDA)
-make
+brew install cmake  # macOS
+apt-get install cmake  # Linux
 
-# Build CPU-only version
-make all  # (when CUDA not available)
-
-# Clean build artifacts
-make clean
-
-# Show help
-make help
+# CUDA installation
+# Visit https://developer.nvidia.com/cuda-downloads
 ```
 
-## Running Tests
+## Installation & Building
 
 ### 1. Download CIFAR-10 Dataset
 
 ```bash
-# Download binary version
-wget https://www.cs.toronto.edu/~kriz/cifar-10-binary.tar.gz
-
-# Extract
-tar -xzf cifar-10-binary.tar.gz
-
-# This creates: cifar-10-batches-bin/
-#   - data_batch_1.bin ... data_batch_5.bin
-#   - test_batch.bin
-#   - batches.meta.txt
+cd final_pj/data
+# Download from https://www.cs.toronto.edu/~kriz/cifar-10-binary.tar.gz
+tar xzf cifar-10-binary.tar.gz
+cd cifar-10-batches-bin
 ```
 
-### 2. Basic Data Loading Test
+Verify you have:
+
+- `data_batch_1.bin` through `data_batch_5.bin` (50,000 training images)
+- `test_batch.bin` (10,000 test images)
+- `batches.meta.txt` (class names)
+
+### 2. Install LIBSVM (optional, for SVM classifier)
 
 ```bash
-make test DATA_PATH=./cifar-10-batches-bin
+# macOS
+brew install libsvm
+
+# Linux
+apt-get install libsvm-dev
+
+# Or build from source:
+git clone https://github.com/cjlin1/libsvm.git
+cd libsvm
+make
 ```
 
-### 3. CPU vs GPU Comparison
+### 3. Build the Project
 
 ```bash
-# Run comparison (auto-detects CUDA)
-make compare DATA_PATH=./cifar-10-batches-bin
-
-# Run CPU-only comparison
-make compare-cpu DATA_PATH=./cifar-10-batches-bin
+cd final_pj
+mkdir -p build
+cd build
+cmake ..
+make
 ```
 
-## Configuration
+This will create:
 
-### Device Selection
+- `train_cpu` - CPU training executable
+- `train_gpu` - GPU training executable
+- `extract_features` - Feature extraction executable
+- `svm_classifier` - SVM classification executable
 
-You can easily configure which device to use:
+## Usage
 
-```c
-#include "config.h"
-
-// Create configuration
-Config cfg = config_default();
-
-// Choose device
-cfg.device = DEVICE_CPU;   // or DEVICE_CUDA
-cfg.batch_size = 128;
-cfg.num_epochs = 10;
-
-config_print(&cfg);
-```
-
-### Example: CPU vs GPU Workflow
-
-```c
-// Load data
-CIFAR10Dataset* train_data = cifar10_load_train_data("./cifar-10-batches-bin");
-
-// Transfer to GPU (if needed)
-if (cfg.device == DEVICE_CUDA) {
-    cifar10_transfer_to_device(train_data, DEVICE_CUDA);
-}
-
-// Create batch iterator
-CIFAR10Batch* batch_iter = cifar10_create_batch_iterator(train_data, 128, 1);
-
-// Training loop
-while (cifar10_next_batch(batch_iter, train_data) > 0) {
-    // Your training code here...
-}
-
-// Transfer back to CPU
-cifar10_transfer_to_host(train_data);
-```
-
-## Benchmarking
-
-The project includes comprehensive benchmarking tools:
+### CPU Training (for testing/debugging)
 
 ```bash
-# Results are saved to:
-#   - benchmark_CPU.txt
-#   - benchmark_CUDA.txt
+cd build
+
+# Basic training (20 epochs, batch size 32)
+./train_cpu --data-dir ../data/cifar-10-batches-bin
+
+# Custom parameters
+./train_cpu --data-dir ../data/cifar-10-batches-bin \
+            --epochs 5 \
+            --batch-size 32 \
+            --lr 0.001 \
+            --num-samples 5000  # Use only 5000 samples for quick testing
+
+# Help
+./train_cpu --help
 ```
 
-### Benchmark Output Example
+**Parameters:**
 
-```
-╔════════════════════════════════════════════════╗
-║        Benchmark Results - CPU                 ║
-╠════════════════════════════════════════════════╣
-║ Timing:                                        ║
-║   Data Loading:          2.1234 s              ║
-║   Training:              0.0000 s              ║
-║   Inference:             0.0000 s              ║
-║   Total:                 2.1234 s              ║
-╟────────────────────────────────────────────────╢
-║ Training Metrics:                              ║
-║   Throughput:          5123.45 imgs/s          ║
-╚════════════════════════════════════════════════╝
-```
+- `--epochs N`: Number of training epochs (default: 20)
+- `--batch-size N`: Batch size (default: 32)
+- `--lr LR`: Learning rate (default: 0.001)
+- `--num-samples N`: Number of training samples (default: 50000)
+- `--data-dir PATH`: Path to CIFAR-10 data directory
 
-## Google Colab Integration
-
-### Setup on Colab
+### GPU Training (full dataset)
 
 ```bash
-# 1. Upload project files to Colab
+cd build
 
-# 2. Install build tools (if needed)
-!apt-get update
-!apt-get install -y build-essential
+# Basic training (20 epochs, batch size 64)
+./train_gpu --data-dir ../data/cifar-10-batches-bin
 
-# 3. Download CIFAR-10 data
-!wget https://www.cs.toronto.edu/~kriz/cifar-10-binary.tar.gz
-!tar -xzf cifar-10-binary.tar.gz
+# Custom parameters
+./train_gpu --data-dir ../data/cifar-10-batches-bin \
+            --epochs 20 \
+            --batch-size 128 \
+            --lr 0.001
 
-# 4. Check CUDA availability
-!nvcc --version
-
-# 5. Build with CUDA
-!make clean
-!make
-
-# 6. Run comparison
-!make compare DATA_PATH=./cifar-10-batches-bin
+# Monitor GPU usage in another terminal
+nvidia-smi -l 1  # Update every 1 second
 ```
 
-### Enable GPU on Colab
+**Expected Performance:**
 
-1. Runtime → Change runtime type
-2. Hardware accelerator → GPU
-3. Save
+- **GPU Training Time**: < 10 minutes for 20 epochs (batch size 128)
+- **Final Loss**: < 0.01
+- **GPU Speedup**: 20-50x vs CPU
 
-## Dataset Details
+### Feature Extraction
 
-- **Image format**: 32×32 RGB (3072 values per image)
-- **Channel order**: Red (1024) → Green (1024) → Blue (1024)
-- **Storage order**: Row-major
-- **Classes**: 10 (airplane, automobile, bird, cat, deer, dog, frog, horse, ship, truck)
-- **Training set**: 50,000 images (5 batches × 10,000)
-- **Test set**: 10,000 images
+```bash
+cd build
 
-## API Reference
+# Extract features using pre-trained weights
+./extract_features --data-dir ../data/cifar-10-batches-bin \
+                   --output ./cifar10_features.bin \
+                   --weights ./autoencoder_gpu.weights
 
-### Configuration
-
-```c
-Config cfg = config_default();        // Create default config
-config_print(&cfg);                    // Print configuration
-const char* name = device_type_to_string(DEVICE_CPU);
+# Expected time: < 20 seconds for all 60K images
 ```
 
-### Device Management
+### SVM Classification
 
-```c
-device_init(DEVICE_CUDA, 0);          // Initialize device
-device_is_available(DEVICE_CUDA);     // Check availability
-device_print_info(DEVICE_CUDA);       // Print device info
-device_cleanup(DEVICE_CUDA);          // Cleanup
+Requires pre-extracted features:
 
-DeviceMemory* mem = device_malloc(size, DEVICE_CUDA);
-device_free(mem);
-device_synchronize(DEVICE_CUDA);
+```bash
+cd build
+
+# First extract features
+./extract_features --data-dir ../data/cifar-10-batches-bin \
+                   --output ./cifar10_features.bin
+
+# Then run SVM classifier
+./svm_classifier --data-dir ../data/cifar-10-batches-bin \
+                 --features ./cifar10_features.bin
 ```
 
-### Data Loading
+**Expected Accuracy:** 60-65% on test set
 
-```c
-CIFAR10Dataset* train = cifar10_load_train_data(path);
-CIFAR10Dataset* test = cifar10_load_test_data(path);
-cifar10_print_dataset_info(train);
+## Architecture Details
 
-// Device transfer
-cifar10_transfer_to_device(train, DEVICE_CUDA);
-cifar10_transfer_to_host(train);
+### Encoder
 
-cifar10_free_dataset(train);
+```
+Input (32×32×3)
+    ↓
+Conv2D(256, 3×3, pad=1) + ReLU → (32×32×256) [7,168 params]
+    ↓
+MaxPool2D(2×2) → (16×16×256)
+    ↓
+Conv2D(128, 3×3, pad=1) + ReLU → (16×16×128) [295,040 params]
+    ↓
+MaxPool2D(2×2) → (8×8×128)
+    ↓
+Latent Features (8×8×128 = 8,192 dimensions)
 ```
 
-### Batch Processing
+### Decoder
 
-```c
-CIFAR10Batch* batch = cifar10_create_batch_iterator(dataset, 128, 1);
-
-int size;
-while ((size = cifar10_next_batch(batch, dataset)) > 0) {
-    // batch->data contains batch images
-    // batch->labels contains batch labels
-}
-
-cifar10_reset_batch_iterator(batch);
-cifar10_free_batch_iterator(batch);
+```
+Latent (8×8×128)
+    ↓
+Conv2D(128, 3×3, pad=1) + ReLU → (8×8×128) [147,584 params]
+    ↓
+UpSample2D(2×2) → (16×16×128)
+    ↓
+Conv2D(256, 3×3, pad=1) + ReLU → (16×16×256) [295,168 params]
+    ↓
+UpSample2D(2×2) → (32×32×256)
+    ↓
+Conv2D(3, 3×3, pad=1) [no activation] → (32×32×3) [6,915 params]
+    ↓
+Output (32×32×3)
 ```
 
-### Benchmarking
+**Total Parameters:** 751,875 (trainable)
 
-```c
-Timer* timer = timer_create();
-timer_start(timer);
-// ... code to benchmark ...
-timer_stop(timer);
-double elapsed = timer_elapsed(timer);
+## Training Configuration
 
-BenchmarkResult* result = benchmark_create(DEVICE_CPU);
-// ... fill in metrics ...
-benchmark_print(result);
-benchmark_save_to_file(result, "results.txt");
-benchmark_compare(cpu_result, gpu_result);
+- **Loss Function:** MSE (Mean Squared Error)
+- **Optimizer:** SGD (Stochastic Gradient Descent)
+- **Learning Rate:** 0.001
+- **Epochs:** 20 (configurable)
+- **Data Normalization:** uint8 [0,255] → float [0,1]
+
+## GPU Implementation Details
+
+### Kernels Implemented
+
+1. **naiveConv2D**: 2D convolution with padding and stride support
+2. **reluKernel**: ReLU activation function
+3. **reluBackwardKernel**: ReLU gradient computation
+4. **maxPool2DKernel**: Max pooling with index storage
+5. **maxPoolBackwardKernel**: Max pool gradient routing
+6. **upSampleKernel**: Nearest-neighbor upsampling
+7. **upSampleBackwardKernel**: Upsampling gradient computation
+8. **mseLossKernel**: MSE loss with reduction
+9. **sgdUpdateKernel**: SGD weight updates
+
+### Memory Usage
+
+- **GPU Memory per batch (batch_size=128):**
+  - Input: ~12 MB
+  - Activations: ~300 MB
+  - Weights: ~12 MB
+  - Gradients: ~300 MB
+  - **Total**: ~625 MB (leaves headroom on 8GB GPU)
+
+## Performance Optimization Tips
+
+1. **Batch Size:** Use 128 for GPU training (default 64)
+2. **Learning Rate:** Reduce to 0.0001 if loss diverges
+3. **Number of Epochs:** Monitor convergence, 20 epochs usually sufficient
+4. **GPU Compute:** Run with `nvidia-smi` to verify GPU utilization (>80% is good)
+
+## Output Files
+
+After training and feature extraction:
+
+```
+build/
+├── autoencoder_cpu.weights      # CPU model weights
+├── autoencoder_gpu.weights      # GPU model weights
+└── cifar10_features.bin         # Extracted features (60K × 8192 floats)
 ```
 
-## Next Steps
+## Troubleshooting
 
-- **Phase 2**: Neural network implementation (CPU baseline)
-- **Phase 3**: CUDA kernels for forward/backward pass
-- **Phase 4**: Optimization and advanced features
+### CUDA Out of Memory
 
-## Contributing
+- Reduce batch size: `--batch-size 32`
+- Use fewer samples: `--num-samples 10000`
+- Run GPU memory check: `nvidia-smi`
 
-This is an educational project for parallel programming course at VNU-HCM, University of Science.
+### Slow Training
+
+- Ensure you're using GPU version: `./train_gpu`
+- Check GPU usage: `nvidia-smi` (should be >80%)
+- Try larger batch size: `--batch-size 128`
+
+### Data Loading Errors
+
+- Verify CIFAR-10 data path: `ls data/cifar-10-batches-bin/`
+- Check file permissions: `chmod 644 data/cifar-10-batches-bin/*`
+- Ensure binary files are not corrupted
+
+### Build Errors
+
+- Update CUDA: `nvidia-smi` shows CUDA version
+- Verify CMake: `cmake --version`
+- Check GPU compute capability: `nvidia-smi --query-gpu=compute_cap`
+
+## Performance Targets (MANDATORY)
+
+✓ Autoencoder training time: < 10 minutes  
+✓ Feature extraction time: < 20 seconds for all 60K images  
+✓ Test classification accuracy: 60-65%  
+✓ GPU speedup over CPU: > 20x
+
+## LIBSVM Integration
+
+The SVM classifier uses LIBSVM with RBF kernel:
+
+- **C (regularization):** 10.0
+- **gamma:** 1.0 / 8192.0
+- **Kernel:** RBF (Radial Basis Function)
+
+Training time: ~5-10 minutes for 50K samples
+
+## References
+
+- CIFAR-10 Dataset: https://www.cs.toronto.edu/~kriz/cifar.html
+- LIBSVM: https://www.csie.ntu.edu.tw/~cjlin/libsvm/
 
 ## License
 
-Educational project.
+This project is provided for educational and research purposes.
