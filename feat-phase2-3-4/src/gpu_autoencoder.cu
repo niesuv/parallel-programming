@@ -77,19 +77,21 @@ float GPUAutoencoder::train_step(const GPUTensor4D &input, const GPUTensor4D &ta
     float loss = gpu_mse_loss_with_grad(x13_, target, g13_, h_partial_sums, stream);
 
     // Backward pass
+    // Backward pass
+    // Backward pass
     conv5_.backward(x12_, g13_, g12_, learning_rate, stream);
     up2_.backward(x11_, g12_, g11_, stream);
     // relu4_.backward(x11_, g11_, g10_, stream); // ReLU backward for conv4 output
-    conv4_.backward_fused_relu(x9_, g10_, g9_, learning_rate, stream);
+    conv4_.backward_fused_relu(x9_, x11_, g11_, g9_, learning_rate, stream);
     up1_.backward(x8_, g9_, g8_, stream);
     // relu3_.backward(x8_, g8_, g7_, stream); // ReLU backward for conv3 output
-    conv3_.backward_fused_relu(x6_, g7_, g6_, learning_rate, stream);
+    conv3_.backward_fused_relu(x6_, x8_, g8_, g6_, learning_rate, stream);
     pool2_.backward(x5_, g6_, g5_, stream);
     //relu2_.backward(x5_, g5_, g4_, stream); // ReLU backward for conv2 output
-    conv2_.backward_fused_relu(x3_, g4_, g3_, learning_rate, stream);
+    conv2_.backward_fused_relu(x3_, x5_, g5_, g3_, learning_rate, stream);
     pool1_.backward(x2_, g3_, g2_, stream);
     //relu1_.backward(x2_, g2_, g1_, stream); // ReLU backward for conv1 output
-    conv1_.backward_fused_relu(input, g1_, g0_, learning_rate, stream);
+    conv1_.backward_fused_relu(input, x2_, g2_, g0_, learning_rate, stream);
 
     return loss;
 }

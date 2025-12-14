@@ -42,8 +42,8 @@ public:
   void forward_fused_relu(const GPUTensor4D &input, GPUTensor4D &output, cudaStream_t stream) const;
   void backward(const GPUTensor4D &input, const GPUTensor4D &grad_output,
                 GPUTensor4D &grad_input, float learning_rate, cudaStream_t stream);
-  void backward_fused_relu(const GPUTensor4D &input, const GPUTensor4D &grad_output, GPUTensor4D &grad_input,
-                float learning_rate, cudaStream_t stream);
+  void backward_fused_relu(const GPUTensor4D &input, const GPUTensor4D &forward_output, const GPUTensor4D &grad_output, GPUTensor4D &grad_input,
+                 float learning_rate, cudaStream_t stream);
   void copy_weights_from_host(const float *h_weights, const float *h_bias);
   void copy_weights_to_host(float *h_weights, float *h_bias) const;
 
@@ -69,6 +69,7 @@ private:
   float *d_grad_bias_ = nullptr;
   size_t weights_size_;
   mutable GPUTensor4D col_buffer_;
+  GPUTensor4D intermediate_grad_;
 };
 
 class GPUReLULayer
