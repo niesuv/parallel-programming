@@ -14,11 +14,11 @@ public:
 
     void load_weights_from_cpu(const class Autoencoder& cpu_ae);
 
-    void forward(const GPUTensor4D& input, GPUTensor4D& output);
+    void forward(const GPUTensor4D& input, GPUTensor4D& output, cudaStream_t stream);
 
     float train_step(const GPUTensor4D& input, const GPUTensor4D& target, float learning_rate);
-
-    void encode(const GPUTensor4D& input, GPUTensor4D& latent);
+    float train_step_async(const GPUTensor4D& input, const GPUTensor4D& target, float learning_rate, cudaStream_t stream, float* h_partial_sums);
+    void encode(const GPUTensor4D& input, GPUTensor4D& latent, cudaStream_t stream);
 
     bool save_weights(const std::string& path) const;
     bool load_weights(const std::string& path);
