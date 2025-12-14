@@ -6,9 +6,9 @@
 #include <random>
 #include <stdexcept>
 
-#ifdef _OPENMP
-#include <omp.h>
-#endif
+// #ifdef _OPENMP
+// #include <omp.h>
+// #endif
 
 Conv2DLayer::Conv2DLayer(int in_channels, int out_channels, int kernel_size,
                          int stride, int padding)
@@ -42,9 +42,9 @@ Tensor4D Conv2DLayer::forward(const Tensor4D &input) const {
     const std::size_t weight_ic_stride = static_cast<std::size_t>(k_) * k_;
     const std::size_t weight_oc_stride = static_cast<std::size_t>(in_c_) * weight_ic_stride;
 
-#ifdef _OPENMP
-#pragma omp parallel for collapse(2) schedule(dynamic)
-#endif
+// #ifdef _OPENMP
+// #pragma omp parallel for collapse(2) schedule(dynamic)
+// #endif
     for (int n = 0; n < batch_size; ++n) {
         for (int oc = 0; oc < out_c_; ++oc) {
             const float bias_val = bias_[oc];
@@ -136,9 +136,9 @@ Tensor4D MaxPool2DLayer::backward(const Tensor4D &input, const Tensor4D &grad_ou
     const std::size_t out_c_stride = static_cast<std::size_t>(out_h) * out_w;
     const std::size_t out_n_stride = static_cast<std::size_t>(channels) * out_c_stride;
 
-#ifdef _OPENMP
-#pragma omp parallel for collapse(2) schedule(static)
-#endif
+// #ifdef _OPENMP
+// #pragma omp parallel for collapse(2) schedule(static)
+// #endif
     for (int n = 0; n < batch_size; ++n) {
         for (int c = 0; c < channels; ++c) {
             const std::size_t input_base = n * input_n_stride + c * input_c_stride;
@@ -178,9 +178,9 @@ Tensor4D MaxPool2DLayer::backward(const Tensor4D &input, const Tensor4D &grad_ou
                     }
                     
                     if (max_idx >= 0) {
-#ifdef _OPENMP
-#pragma omp atomic
-#endif
+// #ifdef _OPENMP
+// #pragma omp atomic
+// #endif
                         grad_input.data[max_idx] += grad_output.data[out_row + ow];
                     }
                 }
@@ -201,11 +201,11 @@ Tensor4D Conv2DLayer::backward(const Tensor4D &input, const Tensor4D &grad_outpu
 
     Tensor4D grad_input(batch_size, in_c_, input_h, input_w);
     
-#ifdef _OPENMP
-    const int num_threads = omp_get_max_threads();
-#else
+// #ifdef _OPENMP
+//     const int num_threads = omp_get_max_threads();
+// #else
     const int num_threads = 1;
-#endif
+// #endif
     std::vector<std::vector<float>> thread_grad_weights(num_threads, std::vector<float>(weights_.size(), 0.0f));
     std::vector<std::vector<float>> thread_grad_bias(num_threads, std::vector<float>(out_c_, 0.0f));
 
@@ -216,21 +216,21 @@ Tensor4D Conv2DLayer::backward(const Tensor4D &input, const Tensor4D &grad_outpu
     const std::size_t weight_ic_stride = static_cast<std::size_t>(k_) * k_;
     const std::size_t weight_oc_stride = static_cast<std::size_t>(in_c_) * weight_ic_stride;
 
-#ifdef _OPENMP
-#pragma omp parallel
-#endif
+// #ifdef _OPENMP
+// #pragma omp parallel
+// #endif
     {
-#ifdef _OPENMP
-        int tid = omp_get_thread_num();
-#else
+// #ifdef _OPENMP
+//         int tid = omp_get_thread_num();
+// #else
         int tid = 0;
-#endif
+// #endif
         std::vector<float> &local_grad_weights = thread_grad_weights[tid];
         std::vector<float> &local_grad_bias = thread_grad_bias[tid];
 
-#ifdef _OPENMP
-#pragma omp for collapse(2) schedule(dynamic)
-#endif
+// #ifdef _OPENMP
+// #pragma omp for collapse(2) schedule(dynamic)
+// #endif
         for (int n = 0; n < batch_size; ++n) {
             for (int oc = 0; oc < out_c_; ++oc) {
                 const std::size_t go_base = n * out_n_stride + oc * out_c_stride;
@@ -307,9 +307,9 @@ Tensor4D ReLULayer::forward(const Tensor4D &input) const {
     const float* __restrict__ in_ptr = input.data.data();
     float* __restrict__ out_ptr = output.data.data();
     
-#ifdef _OPENMP
-#pragma omp parallel for simd schedule(static)
-#endif
+// #ifdef _OPENMP
+// #pragma omp parallel for simd schedule(static)
+// #endif
     for (std::size_t i = 0; i < total; ++i) {
         out_ptr[i] = in_ptr[i] > 0.0f ? in_ptr[i] : 0.0f;
     }
@@ -323,9 +323,9 @@ Tensor4D ReLULayer::backward(const Tensor4D &input, const Tensor4D &grad_output)
     const float* __restrict__ grad_out_ptr = grad_output.data.data();
     float* __restrict__ grad_in_ptr = grad_input.data.data();
     
-#ifdef _OPENMP
-#pragma omp parallel for simd schedule(static)
-#endif
+// #ifdef _OPENMP
+// #pragma omp parallel for simd schedule(static)
+// #endif
     for (std::size_t i = 0; i < total; ++i) {
         grad_in_ptr[i] = in_ptr[i] > 0.0f ? grad_out_ptr[i] : 0.0f;
     }
@@ -350,9 +350,9 @@ Tensor4D MaxPool2DLayer::forward(const Tensor4D &input) const {
     const std::size_t out_c_stride = static_cast<std::size_t>(out_h) * out_w;
     const std::size_t out_n_stride = static_cast<std::size_t>(channels) * out_c_stride;
 
-#ifdef _OPENMP
-#pragma omp parallel for collapse(2) schedule(static)
-#endif
+// #ifdef _OPENMP
+// #pragma omp parallel for collapse(2) schedule(static)
+// #endif
     for (int n = 0; n < batch_size; ++n) {
         for (int c = 0; c < channels; ++c) {
             const std::size_t input_base = n * input_n_stride + c * input_c_stride;
@@ -412,9 +412,9 @@ Tensor4D UpSample2DLayer::forward(const Tensor4D &input) const {
     const std::size_t out_c_stride = static_cast<std::size_t>(out_h) * out_w;
     const std::size_t out_n_stride = static_cast<std::size_t>(channels) * out_c_stride;
 
-#ifdef _OPENMP
-#pragma omp parallel for collapse(2) schedule(static)
-#endif
+// #ifdef _OPENMP
+// #pragma omp parallel for collapse(2) schedule(static)
+// #endif
     for (int n = 0; n < batch_size; ++n) {
         for (int c = 0; c < channels; ++c) {
             const std::size_t input_base = n * input_n_stride + c * input_c_stride;
@@ -451,9 +451,9 @@ Tensor4D UpSample2DLayer::backward(const Tensor4D &input, const Tensor4D &grad_o
     const std::size_t out_c_stride = static_cast<std::size_t>(out_h) * out_w;
     const std::size_t out_n_stride = static_cast<std::size_t>(channels) * out_c_stride;
 
-#ifdef _OPENMP
-#pragma omp parallel for collapse(2) schedule(static)
-#endif
+// #ifdef _OPENMP
+// #pragma omp parallel for collapse(2) schedule(static)
+// #endif
     for (int n = 0; n < batch_size; ++n) {
         for (int c = 0; c < channels; ++c) {
             const std::size_t input_base = n * input_n_stride + c * input_c_stride;
@@ -466,9 +466,9 @@ Tensor4D UpSample2DLayer::backward(const Tensor4D &input, const Tensor4D &grad_o
                 
                 for (int ow = 0; ow < out_w; ++ow) {
                     const int iw = ow / scale_;
-#ifdef _OPENMP
-#pragma omp atomic
-#endif
+// #ifdef _OPENMP
+// #pragma omp atomic
+// #endif
                     grad_input.data[input_row + iw] += grad_output.data[out_row + ow];
                 }
             }
@@ -489,9 +489,9 @@ float mse_loss(const Tensor4D &output, const Tensor4D &target) {
     const float* __restrict__ tgt_ptr = target.data.data();
     
     float sum = 0.0f;
-#ifdef _OPENMP
-#pragma omp parallel for simd reduction(+:sum) schedule(static)
-#endif
+// #ifdef _OPENMP
+// #pragma omp parallel for simd reduction(+:sum) schedule(static)
+// #endif
     for (std::size_t i = 0; i < total; ++i) {
         const float diff = out_ptr[i] - tgt_ptr[i];
         sum += diff * diff;
@@ -516,9 +516,9 @@ float mse_loss_with_grad(const Tensor4D &output, const Tensor4D &target,
     float* __restrict__ grad_ptr = grad_output.data.data();
     
     float sum = 0.0f;
-#ifdef _OPENMP
-#pragma omp parallel for simd reduction(+:sum) schedule(static)
-#endif
+// #ifdef _OPENMP
+// #pragma omp parallel for simd reduction(+:sum) schedule(static)
+// #endif
     for (std::size_t i = 0; i < total; ++i) {
         const float diff = out_ptr[i] - tgt_ptr[i];
         sum += diff * diff;
