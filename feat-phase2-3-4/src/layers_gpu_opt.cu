@@ -380,7 +380,7 @@ void gpu_conv2d_forward_tiled(const GPUTensor4D &input, const float *d_weights,
   int tile_h = TILE_HEIGHT * stride + k - stride;
   int tile_w = TILE_WIDTH * stride + k - stride;
   size_t shared_size = tile_h * tile_w * sizeof(float);
-
+  printf("shared_size = %zu bytes\n", shared_size);
   conv2d_forward_tiled_kernel<<<grid, block, shared_size>>>(
       input.d_data, d_weights, d_bias, output.d_data, input.n, in_c, input.h,
       input.w, out_c, out_h, out_w, k, stride, padding);
