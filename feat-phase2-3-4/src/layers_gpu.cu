@@ -9,6 +9,13 @@
 #include <cstdio>
 #include <vector>
 
+// Add these global variables at the top of gpu_layer.cu
+static float* d_epoch_loss_accumulator = nullptr;
+static size_t epoch_loss_accumulator_size = 0;
+static float *d_persistent_partial_sums = nullptr;
+static size_t persistent_partial_sums_size = 0;
+
+
 __global__ void fill_zero_kernel(float *data, size_t n)
 {
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -905,9 +912,6 @@ __global__ void mse_grad_kernel(const float *__restrict__ output,
   
 }
 
-static float *d_persistent_partial_sums = nullptr;
-static size_t persistent_partial_sums_size = 0;
-
 // h_partial_sums: pre-allocated pinned host buffer of size >= grid_size
 float gpu_mse_loss(const GPUTensor4D &output,
                    const GPUTensor4D &target,
@@ -971,4 +975,103 @@ float gpu_mse_loss_with_grad(const GPUTensor4D &output,
 
     // Reuse pinned host buffer for MSE calculation
     return gpu_mse_loss(output, target, h_partial_sums, stream);
+}
+
+// New kernel to accumulate loss on GPU
+__global__ void accumulate_loss_kernel(float* epoch_loss, const float* partial_sums, int n) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        float sum = 0.0f;
+        for (int i = 0; i < n; i++) {
+            sum += partial_sums[i];
+        }
+        atomicAdd(epoch_loss, sum);
+    }
+}
+
+// Modified: accumulate loss on GPU instead of returning to host
+void gpu_mse_loss_accumulate(const GPUTensor4D &output,
+                             const GPUTensor4D &target,
+                             float* d_epoch_loss,
+                             cudaStream_t stream) {
+    size_t n = output.size();
+    int block_size = 256;
+    int grid_size = (n + block_size * 2 - 1) / (block_size * 2);
+    
+    // Allocate persistent device buffer if needed
+    if (d_persistent_partial_sums == nullptr ||
+        persistent_partial_sums_size < static_cast<size_t>(grid_size)) {
+        if (d_persistent_partial_sums) {
+            cudaFree(d_persistent_partial_sums);
+        }
+        persistent_partial_sums_size = static_cast<size_t>(grid_size) * 2;
+        CUDA_CHECK(cudaMalloc(&d_persistent_partial_sums,
+                              persistent_partial_sums_size * sizeof(float)));
+    }
+    
+    size_t shared_mem = block_size * sizeof(float);
+    
+    // Compute MSE loss
+    mse_loss_kernel<<<grid_size, block_size, shared_mem, stream>>>(
+        output.d_data, target.d_data, d_persistent_partial_sums, n);
+    CUDA_CHECK(cudaGetLastError());
+    
+    // Accumulate on GPU - NO HOST SYNC!
+    accumulate_loss_kernel<<<1, 1, 0, stream>>>(
+        d_epoch_loss, d_persistent_partial_sums, grid_size);
+    CUDA_CHECK(cudaGetLastError());
+}
+
+// Modified: compute gradient and accumulate loss on GPU
+void gpu_mse_loss_with_grad_accumulate(const GPUTensor4D &output,
+                                       const GPUTensor4D &target,
+                                       GPUTensor4D &grad_output,
+                                       float* d_epoch_loss,
+                                       cudaStream_t stream) {
+    size_t n = output.size();
+    if (grad_output.n != output.n || grad_output.c != output.c ||
+        grad_output.h != output.h || grad_output.w != output.w) {
+        grad_output.allocate(output.n, output.c, output.h, output.w);
+    }
+    
+    float scale = 1024.0f / static_cast<float>(n);
+    int block_size = 256;
+    int grid_size = (n + block_size - 1) / block_size;
+    
+    // Compute gradient
+    mse_grad_kernel<<<grid_size, block_size, 0, stream>>>(
+        output.d_data, target.d_data, grad_output.d_data, scale, n);
+    CUDA_CHECK(cudaGetLastError());
+    
+    // Accumulate loss on GPU
+    gpu_mse_loss_accumulate(output, target, d_epoch_loss, stream);
+}
+
+// Helper function to initialize epoch loss accumulator
+void init_epoch_loss_accumulator(float** d_epoch_loss) {
+    if (d_epoch_loss_accumulator == nullptr) {
+        CUDA_CHECK(cudaMalloc(&d_epoch_loss_accumulator, sizeof(float)));
+        epoch_loss_accumulator_size = 1;
+    }
+    *d_epoch_loss = d_epoch_loss_accumulator;
+}
+
+// Helper function to reset epoch loss
+void reset_epoch_loss(float* d_epoch_loss, cudaStream_t stream) {
+    CUDA_CHECK(cudaMemsetAsync(d_epoch_loss, 0, sizeof(float), stream));
+}
+
+// Helper function to get accumulated loss
+float get_epoch_loss(float* d_epoch_loss, size_t total_elements) {
+    float h_loss;
+    CUDA_CHECK(cudaMemcpy(&h_loss, d_epoch_loss, sizeof(float), cudaMemcpyDeviceToHost));
+    return h_loss / static_cast<float>(total_elements);
+}
+
+// Cleanup function
+void cleanup_epoch_loss_accumulator() {
+    if (d_epoch_loss_accumulator) {
+        cudaFree(d_epoch_loss_accumulator);
+        d_epoch_loss_accumulator = nullptr;
+        epoch_loss_accumulator_size = 0;
+    }
 }

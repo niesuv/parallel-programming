@@ -17,6 +17,8 @@ public:
     void forward(const GPUTensor4D& input, GPUTensor4D& output, cudaStream_t stream);
 
     float train_step(const GPUTensor4D& input, const GPUTensor4D& target, float learning_rate, cudaStream_t stream, float* h_partial_sums);
+    void train_step(const GPUTensor4D &input, const GPUTensor4D &target,
+                float learning_rate, float* d_epoch_loss, cudaStream_t stream);
     void encode(const GPUTensor4D& input, GPUTensor4D& latent, cudaStream_t stream);
 
     bool save_weights(const std::string& path) const;

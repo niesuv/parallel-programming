@@ -94,6 +94,38 @@ float GPUAutoencoder::train_step(const GPUTensor4D &input, const GPUTensor4D &ta
     return loss;
 }
 
+// Modified train_step - no longer returns loss, just accumulates on GPU
+void GPUAutoencoder::train_step(const GPUTensor4D &input, 
+                                const GPUTensor4D &target,
+                                float learning_rate, 
+                                float* d_epoch_loss,
+                                cudaStream_t stream) {
+    // Forward pass with fused kernels
+    conv1_.forward_fused_relu(input, x2_, stream);
+    pool1_.forward(x2_, x3_, stream);
+    conv2_.forward_fused_relu(x3_, x5_, stream);
+    pool2_.forward(x5_, x6_, stream);
+    conv3_.forward_fused_relu(x6_, x8_, stream);
+    up1_.forward(x8_, x9_, stream);
+    conv4_.forward_fused_relu(x9_, x11_, stream);
+    up2_.forward(x11_, x12_, stream);
+    conv5_.forward(x12_, x13_, stream);
+    
+    // Compute gradient and accumulate loss on GPU (no sync!)
+    gpu_mse_loss_with_grad_accumulate(x13_, target, g13_, d_epoch_loss, stream);
+    
+    // Backward pass
+    conv5_.backward(x12_, g13_, g12_, learning_rate, stream);
+    up2_.backward(x11_, g12_, g11_, stream);
+    conv4_.backward_fused_relu(x9_, g10_, g9_, learning_rate, stream);
+    up1_.backward(x8_, g9_, g8_, stream);
+    conv3_.backward_fused_relu(x6_, g7_, g6_, learning_rate, stream);
+    pool2_.backward(x5_, g6_, g5_, stream);
+    conv2_.backward_fused_relu(x3_, g4_, g3_, learning_rate, stream);
+    pool1_.backward(x2_, g3_, g2_, stream);
+    conv1_.backward_fused_relu(input, g1_, g0_, learning_rate, stream);
+}
+
 bool GPUAutoencoder::save_weights(const std::string &path) const
 {
     std::ofstream out(path, std::ios::binary);

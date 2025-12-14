@@ -115,6 +115,20 @@ float gpu_mse_loss_with_grad(const GPUTensor4D &output,
                              const GPUTensor4D &target,
                              GPUTensor4D &grad_output, float* h_partial_sums,
                              cudaStream_t stream);
+                             
+void init_epoch_loss_accumulator(float** d_epoch_loss);
+void reset_epoch_loss(float* d_epoch_loss, cudaStream_t stream = 0);
+float get_epoch_loss(float* d_epoch_loss, size_t total_elements);
+void cleanup_epoch_loss_accumulator();
+void gpu_mse_loss_accumulate(const GPUTensor4D &output,
+                            const GPUTensor4D &target,
+                            float* d_epoch_loss,
+                            cudaStream_t stream);
+void gpu_mse_loss_with_grad_accumulate(const GPUTensor4D &output,
+                                      const GPUTensor4D &target,
+                                      GPUTensor4D &grad_output,
+                                      float* d_epoch_loss,
+                                      cudaStream_t stream);
 
 #ifdef USE_OPTIMIZED_KERNELS
 void gpu_relu_forward_opt(const GPUTensor4D &input, GPUTensor4D &output, cudaStream_t stream);
