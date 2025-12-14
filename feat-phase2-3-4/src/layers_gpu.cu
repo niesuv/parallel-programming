@@ -965,7 +965,6 @@ float gpu_mse_loss_with_grad(const GPUTensor4D &output,
     int block_size = 256;
     int grid_size = (n + block_size - 1) / block_size;
 
-    float scale = 2.0f / static_cast<float>(n);
     mse_grad_kernel<<<grid_size, block_size, 0, stream>>>(
         output.d_data, target.d_data, grad_output.d_data, scale, n);
     CUDA_CHECK(cudaGetLastError());
