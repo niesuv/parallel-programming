@@ -1,3 +1,22 @@
+/**
+ * @file layers_gpu.cu
+ * @brief GPU Layer Implementations (Naive Version)
+ *
+ * This file contains the basic CUDA implementations for neural network layers.
+ * These are straightforward implementations without advanced optimizations.
+ *
+ * Implemented layers:
+ * - GPUTensor4D: GPU memory tensor with NCHW layout
+ * - GPUConv2DLayer: Basic 2D convolution
+ * - GPUReLULayer: ReLU activation
+ * - GPUMaxPool2DLayer: Max pooling
+ * - GPUUpSample2DLayer: Nearest-neighbor upsampling
+ * - gpu_mse_loss: MSE loss with parallel reduction
+ *
+ * For optimized versions with shared memory and warp shuffle, see
+ * layers_gpu_opt.cu
+ */
+
 #include "cuda_utils.h"
 #include "gpu_layer.h"
 
@@ -9,41 +28,46 @@
 #include <cstdio>
 #include <vector>
 
-// Add these global variables at the top of gpu_layer.cu
-static float* d_epoch_loss_accumulator = nullptr;
-static size_t epoch_loss_accumulator_size = 0;
-static float *d_persistent_partial_sums = nullptr;
-static size_t persistent_partial_sums_size = 0;
+// =============================================================================
+// Forward Declarations
+// =============================================================================
 
+__global__ void relu_forward_kernel(const float *input, float *output,
+                                    size_t n);
+__global__ void relu_backward_kernel(const float *input,
+                                     const float *grad_output,
+                                     float *grad_input, size_t n);
 
-__global__ void fill_zero_kernel(float *data, size_t n)
-{
+// =============================================================================
+// Utility Kernels
+// =============================================================================
+
+__global__ void fill_zero_kernel(float *data, size_t n) {
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < n)
-  {
+  if (idx < n) {
     data[idx] = 0.0f;
   }
 }
 
+// =============================================================================
+// GPUTensor4D Implementation
+// =============================================================================
+
 GPUTensor4D::GPUTensor4D(int n_, int c_, int h_, int w_)
-    : n(n_), c(c_), h(h_), w(w_), d_data(nullptr)
-{
+    : n(n_), c(c_), h(h_), w(w_), d_data(nullptr) {
   allocate(n_, c_, h_, w_);
 }
 
 GPUTensor4D::~GPUTensor4D() { free(); }
 
 GPUTensor4D::GPUTensor4D(GPUTensor4D &&other) noexcept
-    : n(other.n), c(other.c), h(other.h), w(other.w), d_data(other.d_data)
-{
+    : n(other.n), c(other.c), h(other.h), w(other.w), d_data(other.d_data) {
   other.d_data = nullptr;
   other.n = other.c = other.h = other.w = 0;
 }
 
-GPUTensor4D &GPUTensor4D::operator=(GPUTensor4D &&other) noexcept
-{
-  if (this != &other)
-  {
+GPUTensor4D &GPUTensor4D::operator=(GPUTensor4D &&other) noexcept {
+  if (this != &other) {
     free();
     n = other.n;
     c = other.c;
@@ -56,49 +80,43 @@ GPUTensor4D &GPUTensor4D::operator=(GPUTensor4D &&other) noexcept
   return *this;
 }
 
-void GPUTensor4D::allocate(int n_, int c_, int h_, int w_)
-{
+void GPUTensor4D::allocate(int n_, int c_, int h_, int w_) {
   free();
   n = n_;
   c = c_;
   h = h_;
   w = w_;
-  if (size() > 0)
-  {
+  if (size() > 0) {
     CUDA_CHECK(cudaMalloc(&d_data, bytes()));
     CUDA_CHECK(cudaMemset(d_data, 0, bytes()));
   }
 }
 
-void GPUTensor4D::free()
-{
-  if (d_data)
-  {
+void GPUTensor4D::free() {
+  if (d_data) {
     CUDA_CHECK(cudaFree(d_data));
     d_data = nullptr;
   }
   n = c = h = w = 0;
 }
 
-void GPUTensor4D::copy_from_host(const float *h_data)
-{
-  if (d_data && size() > 0)
-  {
+void GPUTensor4D::copy_from_host(const float *h_data) {
+  if (d_data && size() > 0) {
     CUDA_CHECK(cudaMemcpy(d_data, h_data, bytes(), cudaMemcpyHostToDevice));
   }
 }
 
-void GPUTensor4D::copy_from_host_async(const float* h_data, cudaStream_t stream) {
+void GPUTensor4D::copy_from_host_async(const float *h_data,
+                                       cudaStream_t stream) {
   if (d_data && size() > 0) {
     // Dùng pinned memory để copy bất đồng bộ
-    CUDA_CHECK(cudaMemcpyAsync(d_data, h_data, bytes(), cudaMemcpyHostToDevice,stream));
+    CUDA_CHECK(cudaMemcpyAsync(d_data, h_data, bytes(), cudaMemcpyHostToDevice,
+                               stream));
   }
 }
 
-void GPUTensor4D::copy_to_host(float *h_data) const
-{
-  if (d_data && size() > 0)
-  {
+void GPUTensor4D::copy_to_host(float *h_data) const {
+  if (d_data && size() > 0) {
     CUDA_CHECK(cudaMemcpy(h_data, d_data, bytes(), cudaMemcpyDeviceToHost));
   }
 }
@@ -109,8 +127,7 @@ __global__ void conv2d_forward_kernel(const float *__restrict__ input,
                                       float *__restrict__ output,
                                       int batch_size, int in_c, int in_h,
                                       int in_w, int out_c, int out_h, int out_w,
-                                      int k, int stride, int padding)
-{
+                                      int k, int stride, int padding) {
   int ow = blockIdx.x * blockDim.x + threadIdx.x;
   int oh = blockIdx.y * blockDim.y + threadIdx.y;
   int oc_n = blockIdx.z;
@@ -127,50 +144,38 @@ __global__ void conv2d_forward_kernel(const float *__restrict__ input,
   const int ih_base = oh * stride - padding;
   const int iw_base = ow * stride - padding;
 
-  if (k == 3)
-  {
+  if (k == 3) {
 #pragma unroll
-    for (int ic = 0; ic < in_c; ++ic)
-    {
+    for (int ic = 0; ic < in_c; ++ic) {
       const size_t in_ic_offset =
           in_n_offset + static_cast<size_t>(ic) * in_h * in_w;
       const size_t w_ic_offset = w_oc_offset + static_cast<size_t>(ic) * 9;
 
 #pragma unroll
-      for (int kh = 0; kh < 3; ++kh)
-      {
+      for (int kh = 0; kh < 3; ++kh) {
         int ih = ih_base + kh;
-        if (ih >= 0 && ih < in_h)
-        {
+        if (ih >= 0 && ih < in_h) {
           const size_t in_row = in_ic_offset + ih * in_w;
           const size_t w_kh = w_ic_offset + kh * 3;
 
 #pragma unroll
-          for (int kw = 0; kw < 3; ++kw)
-          {
+          for (int kw = 0; kw < 3; ++kw) {
             int iw = iw_base + kw;
-            if (iw >= 0 && iw < in_w)
-            {
+            if (iw >= 0 && iw < in_w) {
               sum += input[in_row + iw] * weights[w_kh + kw];
             }
           }
         }
       }
     }
-  }
-  else
-  {
-    for (int ic = 0; ic < in_c; ++ic)
-    {
-      for (int kh = 0; kh < k; ++kh)
-      {
-        for (int kw = 0; kw < k; ++kw)
-        {
+  } else {
+    for (int ic = 0; ic < in_c; ++ic) {
+      for (int kh = 0; kh < k; ++kh) {
+        for (int kw = 0; kw < k; ++kw) {
           int ih = ih_base + kh;
           int iw = iw_base + kw;
 
-          if (ih >= 0 && ih < in_h && iw >= 0 && iw < in_w)
-          {
+          if (ih >= 0 && ih < in_h && iw >= 0 && iw < in_w) {
             size_t in_idx =
                 in_n_offset + (static_cast<size_t>(ic) * in_h + ih) * in_w + iw;
             size_t w_idx =
@@ -190,8 +195,7 @@ __global__ void conv2d_forward_kernel(const float *__restrict__ input,
 __global__ void conv2d_backward_data_kernel(
     const float *__restrict__ grad_output, const float *__restrict__ weights,
     float *__restrict__ grad_input, int batch_size, int in_c, int in_h,
-    int in_w, int out_c, int out_h, int out_w, int k, int stride, int padding)
-{
+    int in_w, int out_c, int out_h, int out_w, int k, int stride, int padding) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   int total_inputs = batch_size * in_c * in_h * in_w;
 
@@ -207,22 +211,17 @@ __global__ void conv2d_backward_data_kernel(
 
   float sum = 0.0f;
 
-  for (int oc = 0; oc < out_c; ++oc)
-  {
-    for (int kh = 0; kh < k; ++kh)
-    {
-      for (int kw = 0; kw < k; ++kw)
-      {
+  for (int oc = 0; oc < out_c; ++oc) {
+    for (int kh = 0; kh < k; ++kh) {
+      for (int kw = 0; kw < k; ++kw) {
         int oh_check = ih + padding - kh;
         int ow_check = iw + padding - kw;
 
-        if (oh_check % stride == 0 && ow_check % stride == 0)
-        {
+        if (oh_check % stride == 0 && ow_check % stride == 0) {
           int oh = oh_check / stride;
           int ow = ow_check / stride;
 
-          if (oh >= 0 && oh < out_h && ow >= 0 && ow < out_w)
-          {
+          if (oh >= 0 && oh < out_h && ow >= 0 && ow < out_w) {
             size_t go_idx =
                 ((static_cast<size_t>(n) * out_c + oc) * out_h + oh) * out_w +
                 ow;
@@ -242,8 +241,7 @@ __global__ void conv2d_backward_weights_kernel(
     const float *__restrict__ input, const float *__restrict__ grad_output,
     float *__restrict__ grad_weights, float *__restrict__ grad_bias,
     int batch_size, int in_c, int in_h, int in_w, int out_c, int out_h,
-    int out_w, int k, int stride, int padding)
-{
+    int out_w, int k, int stride, int padding) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   int total_weights = out_c * in_c * k * k;
 
@@ -259,17 +257,13 @@ __global__ void conv2d_backward_weights_kernel(
 
   float sum = 0.0f;
 
-  for (int n = 0; n < batch_size; ++n)
-  {
-    for (int oh = 0; oh < out_h; ++oh)
-    {
-      for (int ow = 0; ow < out_w; ++ow)
-      {
+  for (int n = 0; n < batch_size; ++n) {
+    for (int oh = 0; oh < out_h; ++oh) {
+      for (int ow = 0; ow < out_w; ++ow) {
         int ih = oh * stride + kh - padding;
         int iw = ow * stride + kw - padding;
 
-        if (ih >= 0 && ih < in_h && iw >= 0 && iw < in_w)
-        {
+        if (ih >= 0 && ih < in_h && iw >= 0 && iw < in_w) {
           size_t in_idx =
               ((static_cast<size_t>(n) * in_c + ic) * in_h + ih) * in_w + iw;
           size_t go_idx =
@@ -286,19 +280,15 @@ __global__ void conv2d_backward_weights_kernel(
 __global__ void
 conv2d_backward_bias_kernel(const float *__restrict__ grad_output,
                             float *__restrict__ grad_bias, int batch_size,
-                            int out_c, int out_h, int out_w)
-{
+                            int out_c, int out_h, int out_w) {
   int oc = blockIdx.x * blockDim.x + threadIdx.x;
   if (oc >= out_c)
     return;
 
   float sum = 0.0f;
-  for (int n = 0; n < batch_size; ++n)
-  {
-    for (int oh = 0; oh < out_h; ++oh)
-    {
-      for (int ow = 0; ow < out_w; ++ow)
-      {
+  for (int n = 0; n < batch_size; ++n) {
+    for (int oh = 0; oh < out_h; ++oh) {
+      for (int ow = 0; ow < out_w; ++ow) {
         size_t idx =
             ((static_cast<size_t>(n) * out_c + oc) * out_h + oh) * out_w + ow;
         sum += grad_output[idx];
@@ -309,11 +299,9 @@ conv2d_backward_bias_kernel(const float *__restrict__ grad_output,
 }
 
 __global__ void sgd_update_kernel(float *params, const float *grads, float lr,
-                                  size_t n)
-{
+                                  size_t n) {
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < n)
-  {
+  if (idx < n) {
     params[idx] -= lr * grads[idx];
   }
 }
@@ -321,8 +309,7 @@ __global__ void sgd_update_kernel(float *params, const float *grads, float lr,
 GPUConv2DLayer::GPUConv2DLayer(int in_channels, int out_channels,
                                int kernel_size, int stride, int padding)
     : in_c_(in_channels), out_c_(out_channels), k_(kernel_size),
-      stride_(stride), padding_(padding)
-{
+      stride_(stride), padding_(padding) {
 
   weights_size_ = static_cast<size_t>(out_c_) * in_c_ * k_ * k_;
 
@@ -335,8 +322,7 @@ GPUConv2DLayer::GPUConv2DLayer(int in_channels, int out_channels,
   CUDA_CHECK(cudaMemset(d_bias_, 0, out_c_ * sizeof(float)));
 }
 
-GPUConv2DLayer::~GPUConv2DLayer()
-{
+GPUConv2DLayer::~GPUConv2DLayer() {
   if (d_weights_)
     cudaFree(d_weights_);
   if (d_bias_)
@@ -348,8 +334,7 @@ GPUConv2DLayer::~GPUConv2DLayer()
 }
 
 void GPUConv2DLayer::copy_weights_from_host(const float *h_weights,
-                                            const float *h_bias)
-{
+                                            const float *h_bias) {
   CUDA_CHECK(cudaMemcpy(d_weights_, h_weights, weights_size_ * sizeof(float),
                         cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_bias_, h_bias, out_c_ * sizeof(float),
@@ -357,23 +342,20 @@ void GPUConv2DLayer::copy_weights_from_host(const float *h_weights,
 }
 
 void GPUConv2DLayer::copy_weights_to_host(float *h_weights,
-                                          float *h_bias) const
-{
+                                          float *h_bias) const {
   CUDA_CHECK(cudaMemcpy(h_weights, d_weights_, weights_size_ * sizeof(float),
                         cudaMemcpyDeviceToHost));
   CUDA_CHECK(cudaMemcpy(h_bias, d_bias_, out_c_ * sizeof(float),
                         cudaMemcpyDeviceToHost));
 }
 
-void GPUConv2DLayer::forward(const GPUTensor4D &input,
-                             GPUTensor4D &output, cudaStream_t stream) const
-{
+void GPUConv2DLayer::forward(const GPUTensor4D &input, GPUTensor4D &output,
+                             cudaStream_t stream) const {
   int out_h = get_output_h(input.h);
   int out_w = get_output_w(input.w);
 
   if (output.n != input.n || output.c != out_c_ || output.h != out_h ||
-      output.w != out_w)
-  {
+      output.w != out_w) {
     output.allocate(input.n, out_c_, out_h, out_w);
   }
 
@@ -395,34 +377,41 @@ void GPUConv2DLayer::forward(const GPUTensor4D &input,
 
 // Fused Conv2D + ReLU forward for better performance
 void GPUConv2DLayer::forward_fused_relu(const GPUTensor4D &input,
-                                        GPUTensor4D &output, cudaStream_t stream) const
-{
+                                        GPUTensor4D &output,
+                                        cudaStream_t stream) const {
   int out_h = get_output_h(input.h);
   int out_w = get_output_w(input.w);
 
   if (output.n != input.n || output.c != out_c_ || output.h != out_h ||
-      output.w != out_w)
-  {
+      output.w != out_w) {
     output.allocate(input.n, out_c_, out_h, out_w);
   }
 
 #ifdef USE_OPTIMIZED_KERNELS
   // Use optimized fused conv2d+bias+relu kernel for maximum performance
-  gpu_conv2d_relu_forward_opt(input, d_weights_, d_bias_, output, in_c_,
-                              out_c_, k_, stride_, padding_, stream);
+  gpu_conv2d_relu_forward_opt(input, d_weights_, d_bias_, output, in_c_, out_c_,
+                              k_, stride_, padding_, stream);
 #else
   // Fallback: use standard forward then relu
-  forward(input, output);
-  // ReLU is applied separately - not ideal for non-optimized path
+  forward(input, output, stream);
+  // Apply ReLU in-place
+  {
+    size_t total = output.size();
+    int block_size = 256;
+    int grid_size = (total + block_size - 1) / block_size;
+    relu_forward_kernel<<<grid_size, block_size, 0, stream>>>(
+        output.d_data, output.d_data, total);
+    CUDA_CHECK(cudaGetLastError());
+  }
 #endif
 }
 
 void GPUConv2DLayer::backward(const GPUTensor4D &input,
                               const GPUTensor4D &grad_output,
-                              GPUTensor4D &grad_input, float learning_rate, cudaStream_t stream){
+                              GPUTensor4D &grad_input, float learning_rate,
+                              cudaStream_t stream) {
   if (grad_input.n != input.n || grad_input.c != in_c_ ||
-      grad_input.h != input.h || grad_input.w != input.w)
-  {
+      grad_input.h != input.h || grad_input.w != input.w) {
     grad_input.allocate(input.n, in_c_, input.h, input.w);
   }
 
@@ -476,67 +465,64 @@ void GPUConv2DLayer::backward(const GPUTensor4D &input,
   CUDA_CHECK(cudaGetLastError());
 }
 
-
 void GPUConv2DLayer::backward_fused_relu(const GPUTensor4D &input,
-                                        const GPUTensor4D &grad_output,
-                                        GPUTensor4D &grad_input,
-                                        float learning_rate,
-                                        cudaStream_t stream)
-{
-    // Đảm bảo grad_input được allocate đúng shape
-    if (grad_input.n != input.n || grad_input.c != in_c_ ||
-        grad_input.h != input.h || grad_input.w != input.w)
-    {
-        grad_input.allocate(input.n, in_c_, input.h, input.w);
-    }
+                                         const GPUTensor4D &grad_output,
+                                         GPUTensor4D &grad_input,
+                                         float learning_rate,
+                                         cudaStream_t stream) {
+  // Đảm bảo grad_input được allocate đúng shape
+  if (grad_input.n != input.n || grad_input.c != in_c_ ||
+      grad_input.h != input.h || grad_input.w != input.w) {
+    grad_input.allocate(input.n, in_c_, input.h, input.w);
+  }
 
 #ifdef USE_OPTIMIZED_KERNELS
-    // Fused kernel: ReLU backward + Conv2D backward data
-    gpu_conv2d_relu_backward_data_opt(grad_output, d_weights_, input, grad_input,
-                                      input.n, in_c_, input.h, input.w,
-                                      out_c_, k_, stride_, padding_, stream);
+  // Fused kernel: ReLU backward + Conv2D backward data
+  gpu_conv2d_relu_backward_data_opt(grad_output, d_weights_, input, grad_input,
+                                    input.n, in_c_, input.h, input.w, out_c_,
+                                    k_, stride_, padding_, stream);
 
-    // Conv2D backward weights & bias (không cần ReLU)
-    gpu_conv2d_backward_weights_opt(input, grad_output, d_grad_weights_,
-                                    d_grad_bias_, in_c_, out_c_, k_, stride_,
-                                    padding_, stream);
+  // Conv2D backward weights & bias (không cần ReLU)
+  gpu_conv2d_backward_weights_opt(input, grad_output, d_grad_weights_,
+                                  d_grad_bias_, in_c_, out_c_, k_, stride_,
+                                  padding_, stream);
 #else
-    // Fallback: tách riêng ReLU và Conv backward
-    GPUTensor4D grad_relu(input.n, input.c, input.h, input.w);
-    relu_backward(input, grad_output, grad_relu, stream);
-    backward(input, grad_relu, grad_input, learning_rate, stream);
+  // Fallback: separate ReLU and Conv backward
+  GPUTensor4D grad_relu(grad_output.n, grad_output.c, grad_output.h,
+                        grad_output.w);
+  {
+    size_t total = grad_output.size();
+    int block_size = 256;
+    int grid_size = (total + block_size - 1) / block_size;
+    relu_backward_kernel<<<grid_size, block_size, 0, stream>>>(
+        input.d_data, grad_output.d_data, grad_relu.d_data, total);
+    CUDA_CHECK(cudaGetLastError());
+  }
+  backward(input, grad_relu, grad_input, learning_rate, stream);
 #endif
 }
 
-
-
 __global__ void relu_forward_kernel(const float *input, float *output,
-                                    size_t n)
-{
+                                    size_t n) {
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < n)
-  {
+  if (idx < n) {
     output[idx] = fmaxf(0.0f, input[idx]);
   }
 }
 
 __global__ void relu_backward_kernel(const float *input,
                                      const float *grad_output,
-                                     float *grad_input, size_t n)
-{
+                                     float *grad_input, size_t n) {
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < n)
-  {
+  if (idx < n) {
     grad_input[idx] = (input[idx] > 0.0f) ? grad_output[idx] : 0.0f;
   }
 }
 
-void GPUReLULayer::forward(const GPUTensor4D &input,
-                           GPUTensor4D &output, cudaStream_t stream) const
-{
+void GPUReLULayer::forward(const GPUTensor4D &input, GPUTensor4D &output,
+                           cudaStream_t stream) const {
   if (output.n != input.n || output.c != input.c || output.h != input.h ||
-      output.w != input.w)
-  {
+      output.w != input.w) {
     output.allocate(input.n, input.c, input.h, input.w);
   }
 
@@ -555,11 +541,10 @@ void GPUReLULayer::forward(const GPUTensor4D &input,
 
 void GPUReLULayer::backward(const GPUTensor4D &input,
                             const GPUTensor4D &grad_output,
-                            GPUTensor4D &grad_input, cudaStream_t stream) const
-{
+                            GPUTensor4D &grad_input,
+                            cudaStream_t stream) const {
   if (grad_input.n != input.n || grad_input.c != input.c ||
-      grad_input.h != input.h || grad_input.w != input.w)
-  {
+      grad_input.h != input.h || grad_input.w != input.w) {
     grad_input.allocate(input.n, input.c, input.h, input.w);
   }
 
@@ -580,8 +565,7 @@ __global__ void maxpool2d_forward_kernel(const float *__restrict__ input,
                                          float *__restrict__ output,
                                          int batch_size, int channels, int in_h,
                                          int in_w, int out_h, int out_w, int k,
-                                         int stride)
-{
+                                         int stride) {
   int ow = blockIdx.x * blockDim.x + threadIdx.x;
   int oh = blockIdx.y * blockDim.y + threadIdx.y;
   int c_n = blockIdx.z;
@@ -598,8 +582,7 @@ __global__ void maxpool2d_forward_kernel(const float *__restrict__ input,
 
   float max_val = -FLT_MAX;
 
-  if (k == 2 && stride == 2)
-  {
+  if (k == 2 && stride == 2) {
     const size_t idx00 = in_base + ih_base * in_w + iw_base;
     const size_t idx01 = idx00 + 1;
     const size_t idx10 = idx00 + in_w;
@@ -609,20 +592,15 @@ __global__ void maxpool2d_forward_kernel(const float *__restrict__ input,
     max_val = fmaxf(max_val, input[idx01]);
     max_val = fmaxf(max_val, input[idx10]);
     max_val = fmaxf(max_val, input[idx11]);
-  }
-  else
-  {
+  } else {
 #pragma unroll 4
-    for (int kh = 0; kh < k; ++kh)
-    {
+    for (int kh = 0; kh < k; ++kh) {
 #pragma unroll 4
-      for (int kw = 0; kw < k; ++kw)
-      {
+      for (int kw = 0; kw < k; ++kw) {
         int ih = ih_base + kh;
         int iw = iw_base + kw;
 
-        if (ih < in_h && iw < in_w)
-        {
+        if (ih < in_h && iw < in_w) {
           size_t in_idx = in_base + ih * in_w + iw;
           max_val = fmaxf(max_val, input[in_idx]);
         }
@@ -640,8 +618,7 @@ __global__ void maxpool2d_backward_kernel(const float *__restrict__ input,
                                           float *__restrict__ grad_input,
                                           int batch_size, int channels,
                                           int in_h, int in_w, int out_h,
-                                          int out_w, int k, int stride)
-{
+                                          int out_w, int k, int stride) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   int total = batch_size * channels * out_h * out_w;
 
@@ -658,19 +635,15 @@ __global__ void maxpool2d_backward_kernel(const float *__restrict__ input,
   float max_val = -FLT_MAX;
   int max_ih = -1, max_iw = -1;
 
-  for (int kh = 0; kh < k; ++kh)
-  {
-    for (int kw = 0; kw < k; ++kw)
-    {
+  for (int kh = 0; kh < k; ++kh) {
+    for (int kw = 0; kw < k; ++kw) {
       int ih = oh * stride + kh;
       int iw = ow * stride + kw;
 
-      if (ih < in_h && iw < in_w)
-      {
+      if (ih < in_h && iw < in_w) {
         size_t in_idx =
             ((static_cast<size_t>(n) * channels + c) * in_h + ih) * in_w + iw;
-        if (input[in_idx] > max_val)
-        {
+        if (input[in_idx] > max_val) {
           max_val = input[in_idx];
           max_ih = ih;
           max_iw = iw;
@@ -679,8 +652,7 @@ __global__ void maxpool2d_backward_kernel(const float *__restrict__ input,
     }
   }
 
-  if (max_ih >= 0 && max_iw >= 0)
-  {
+  if (max_ih >= 0 && max_iw >= 0) {
     size_t max_idx =
         ((static_cast<size_t>(n) * channels + c) * in_h + max_ih) * in_w +
         max_iw;
@@ -691,15 +663,13 @@ __global__ void maxpool2d_backward_kernel(const float *__restrict__ input,
 GPUMaxPool2DLayer::GPUMaxPool2DLayer(int kernel_size, int stride)
     : k_(kernel_size), stride_(stride) {}
 
-void GPUMaxPool2DLayer::forward(const GPUTensor4D &input,
-                                GPUTensor4D &output, cudaStream_t stream) const
-{
+void GPUMaxPool2DLayer::forward(const GPUTensor4D &input, GPUTensor4D &output,
+                                cudaStream_t stream) const {
   int out_h = get_output_h(input.h);
   int out_w = get_output_w(input.w);
 
   if (output.n != input.n || output.c != input.c || output.h != out_h ||
-      output.w != out_w)
-  {
+      output.w != out_w) {
     output.allocate(input.n, input.c, out_h, out_w);
   }
 
@@ -719,16 +689,16 @@ void GPUMaxPool2DLayer::forward(const GPUTensor4D &input,
 
 void GPUMaxPool2DLayer::backward(const GPUTensor4D &input,
                                  const GPUTensor4D &grad_output,
-                                 GPUTensor4D &grad_input, cudaStream_t stream) const
-{
+                                 GPUTensor4D &grad_input,
+                                 cudaStream_t stream) const {
   if (grad_input.n != input.n || grad_input.c != input.c ||
-      grad_input.h != input.h || grad_input.w != input.w)
-  {
+      grad_input.h != input.h || grad_input.w != input.w) {
     grad_input.allocate(input.n, input.c, input.h, input.w);
   }
 
 #ifdef USE_OPTIMIZED_KERNELS
-  gpu_maxpool2d_backward_opt(input, grad_output, grad_input, k_, stride_, stream);
+  gpu_maxpool2d_backward_opt(input, grad_output, grad_input, k_, stride_,
+                             stream);
 #else
   CUDA_CHECK(cudaMemset(grad_input.d_data, 0, grad_input.bytes()));
 
@@ -747,8 +717,7 @@ __global__ void upsample2d_forward_kernel(const float *__restrict__ input,
                                           float *__restrict__ output,
                                           int batch_size, int channels,
                                           int in_h, int in_w, int out_h,
-                                          int out_w, int scale)
-{
+                                          int out_w, int scale) {
   int ow = blockIdx.x * blockDim.x + threadIdx.x;
   int oh = blockIdx.y * blockDim.y + threadIdx.y;
   int c_n = blockIdx.z;
@@ -772,8 +741,7 @@ __global__ void
 upsample2d_backward_kernel(const float *__restrict__ grad_output,
                            float *__restrict__ grad_input, int batch_size,
                            int channels, int in_h, int in_w, int out_h,
-                           int out_w, int scale)
-{
+                           int out_w, int scale) {
   int ow = blockIdx.x * blockDim.x + threadIdx.x;
   int oh = blockIdx.y * blockDim.y + threadIdx.y;
   int c_n = blockIdx.z;
@@ -795,15 +763,13 @@ upsample2d_backward_kernel(const float *__restrict__ grad_output,
 
 GPUUpSample2DLayer::GPUUpSample2DLayer(int scale) : scale_(scale) {}
 
-void GPUUpSample2DLayer::forward(const GPUTensor4D &input,
-                                 GPUTensor4D &output, cudaStream_t stream) const
-{
+void GPUUpSample2DLayer::forward(const GPUTensor4D &input, GPUTensor4D &output,
+                                 cudaStream_t stream) const {
   int out_h = get_output_h(input.h);
   int out_w = get_output_w(input.w);
 
   if (output.n != input.n || output.c != input.c || output.h != out_h ||
-      output.w != out_w)
-  {
+      output.w != out_w) {
     output.allocate(input.n, input.c, out_h, out_w);
   }
 
@@ -823,11 +789,10 @@ void GPUUpSample2DLayer::forward(const GPUTensor4D &input,
 
 void GPUUpSample2DLayer::backward(const GPUTensor4D &input,
                                   const GPUTensor4D &grad_output,
-                                  GPUTensor4D &grad_input, cudaStream_t stream) const
-{
+                                  GPUTensor4D &grad_input,
+                                  cudaStream_t stream) const {
   if (grad_input.n != input.n || grad_input.c != input.c ||
-      grad_input.h != input.h || grad_input.w != input.w)
-  {
+      grad_input.h != input.h || grad_input.w != input.w) {
     grad_input.allocate(input.n, input.c, input.h, input.w);
   }
 
@@ -852,21 +817,18 @@ void GPUUpSample2DLayer::backward(const GPUTensor4D &input,
 
 __global__ void mse_loss_kernel(const float *__restrict__ output,
                                 const float *__restrict__ target,
-                                float *__restrict__ partial_sums, size_t n)
-{
+                                float *__restrict__ partial_sums, size_t n) {
   extern __shared__ float sdata[];
 
   size_t tid = threadIdx.x;
   size_t idx = blockIdx.x * blockDim.x * 2 + threadIdx.x;
 
   float val = 0.0f;
-  if (idx < n)
-  {
+  if (idx < n) {
     float diff = output[idx] - target[idx];
     val = diff * diff;
   }
-  if (idx + blockDim.x < n)
-  {
+  if (idx + blockDim.x < n) {
     float diff = output[idx + blockDim.x] - target[idx + blockDim.x];
     val += diff * diff;
   }
@@ -874,29 +836,24 @@ __global__ void mse_loss_kernel(const float *__restrict__ output,
   sdata[tid] = val;
   __syncthreads();
 
-  for (unsigned int s = blockDim.x / 2; s > 32; s >>= 1)
-  {
-    if (tid < s)
-    {
+  for (unsigned int s = blockDim.x / 2; s > 32; s >>= 1) {
+    if (tid < s) {
       sdata[tid] += sdata[tid + s];
     }
     __syncthreads();
   }
 
-  if (tid < 32)
-  {
+  if (tid < 32) {
     volatile float *vsmem = sdata;
     if (blockDim.x >= 64)
       vsmem[tid] += vsmem[tid + 32];
     float myVal = vsmem[tid];
 
-    for (int offset = 16; offset > 0; offset /= 2)
-    {
+    for (int offset = 16; offset > 0; offset /= 2) {
       myVal += __shfl_down_sync(0xffffffff, myVal, offset);
     }
 
-    if (tid == 0)
-    {
+    if (tid == 0) {
       partial_sums[blockIdx.x] = myVal;
     }
   }
@@ -905,173 +862,74 @@ __global__ void mse_loss_kernel(const float *__restrict__ output,
 __global__ void mse_grad_kernel(const float *__restrict__ output,
                                 const float *__restrict__ target,
                                 float *__restrict__ grad_output, float scale,
-                                size_t n)
-{
+                                size_t n) {
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < n) grad_output[idx] = 2.0f * scale * (output[idx] - target[idx]);
-  
+  if (idx < n)
+    grad_output[idx] = 2.0f * scale * (output[idx] - target[idx]);
 }
 
+static float *d_persistent_partial_sums = nullptr;
+static size_t persistent_partial_sums_size = 0;
+
 // h_partial_sums: pre-allocated pinned host buffer of size >= grid_size
-float gpu_mse_loss(const GPUTensor4D &output,
-                   const GPUTensor4D &target,
-                   float* h_partial_sums,
-                   cudaStream_t stream) {
-    size_t n = output.size();
-    int block_size = 256;
-    int grid_size = (n + block_size * 2 - 1) / (block_size * 2);
+float gpu_mse_loss(const GPUTensor4D &output, const GPUTensor4D &target,
+                   float *h_partial_sums, cudaStream_t stream) {
+  size_t n = output.size();
+  int block_size = 256;
+  int grid_size = (n + block_size * 2 - 1) / (block_size * 2);
 
-    // allocate persistent device buffer if needed
-    if (d_persistent_partial_sums == nullptr ||
-        persistent_partial_sums_size < static_cast<size_t>(grid_size)) {
-        if (d_persistent_partial_sums) {
-            cudaFree(d_persistent_partial_sums);
-        }
-        persistent_partial_sums_size = static_cast<size_t>(grid_size) * 2;
-        CUDA_CHECK(cudaMalloc(&d_persistent_partial_sums,
-                              persistent_partial_sums_size * sizeof(float)));
+  // allocate persistent device buffer if needed
+  if (d_persistent_partial_sums == nullptr ||
+      persistent_partial_sums_size < static_cast<size_t>(grid_size)) {
+    if (d_persistent_partial_sums) {
+      cudaFree(d_persistent_partial_sums);
     }
+    persistent_partial_sums_size = static_cast<size_t>(grid_size) * 2;
+    CUDA_CHECK(cudaMalloc(&d_persistent_partial_sums,
+                          persistent_partial_sums_size * sizeof(float)));
+  }
 
-    size_t shared_mem = block_size * sizeof(float);
-    mse_loss_kernel<<<grid_size, block_size, shared_mem, stream>>>(
-        output.d_data, target.d_data, d_persistent_partial_sums, n);
-    CUDA_CHECK(cudaGetLastError());
+  size_t shared_mem = block_size * sizeof(float);
+  mse_loss_kernel<<<grid_size, block_size, shared_mem, stream>>>(
+      output.d_data, target.d_data, d_persistent_partial_sums, n);
+  CUDA_CHECK(cudaGetLastError());
 
-    // async copy device -> pinned host
-    CUDA_CHECK(cudaMemcpyAsync(h_partial_sums, d_persistent_partial_sums,
-                               grid_size * sizeof(float),
-                               cudaMemcpyDeviceToHost, stream));
+  // async copy device -> pinned host
+  CUDA_CHECK(cudaMemcpyAsync(h_partial_sums, d_persistent_partial_sums,
+                             grid_size * sizeof(float), cudaMemcpyDeviceToHost,
+                             stream));
 
-    // synchronize stream to ensure copy is done
-    CUDA_CHECK(cudaStreamSynchronize(stream));
+  // synchronize stream to ensure copy is done
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    float sum = 0.0f;
-    for (int i = 0; i < grid_size; ++i) {
-        sum += h_partial_sums[i];
-    }
+  float sum = 0.0f;
+  for (int i = 0; i < grid_size; ++i) {
+    sum += h_partial_sums[i];
+  }
 
-    return sum / static_cast<float>(n);
+  return sum / static_cast<float>(n);
 }
 
 float gpu_mse_loss_with_grad(const GPUTensor4D &output,
                              const GPUTensor4D &target,
-                             GPUTensor4D &grad_output,
-                             float* h_partial_sums,
+                             GPUTensor4D &grad_output, float *h_partial_sums,
                              cudaStream_t stream) {
-    size_t n = output.size();
+  size_t n = output.size();
 
-    if (grad_output.n != output.n || grad_output.c != output.c ||
-        grad_output.h != output.h || grad_output.w != output.w) {
-        grad_output.allocate(output.n, output.c, output.h, output.w);
-    }
+  if (grad_output.n != output.n || grad_output.c != output.c ||
+      grad_output.h != output.h || grad_output.w != output.w) {
+    grad_output.allocate(output.n, output.c, output.h, output.w);
+  }
 
-    float scale = 1024.0f / static_cast<float>(n); // scale để loss và grad đồng bộ
-    int block_size = 256;
-    int grid_size = (n + block_size - 1) / block_size;
+  float scale =
+      1024.0f / static_cast<float>(n); // scale để loss và grad đồng bộ
+  int block_size = 256;
+  int grid_size = (n + block_size - 1) / block_size;
 
-    mse_grad_kernel<<<grid_size, block_size, 0, stream>>>(
-        output.d_data, target.d_data, grad_output.d_data, scale, n);
-    CUDA_CHECK(cudaGetLastError());
+  mse_grad_kernel<<<grid_size, block_size, 0, stream>>>(
+      output.d_data, target.d_data, grad_output.d_data, scale, n);
+  CUDA_CHECK(cudaGetLastError());
 
-    // Reuse pinned host buffer for MSE calculation
-    return gpu_mse_loss(output, target, h_partial_sums, stream);
-}
-
-// New kernel to accumulate loss on GPU
-__global__ void accumulate_loss_kernel(float* epoch_loss, const float* partial_sums, int n) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        float sum = 0.0f;
-        for (int i = 0; i < n; i++) {
-            sum += partial_sums[i];
-        }
-        atomicAdd(epoch_loss, sum);
-    }
-}
-
-// Modified: accumulate loss on GPU instead of returning to host
-void gpu_mse_loss_accumulate(const GPUTensor4D &output,
-                             const GPUTensor4D &target,
-                             float* d_epoch_loss,
-                             cudaStream_t stream) {
-    size_t n = output.size();
-    int block_size = 256;
-    int grid_size = (n + block_size * 2 - 1) / (block_size * 2);
-    
-    // Allocate persistent device buffer if needed
-    if (d_persistent_partial_sums == nullptr ||
-        persistent_partial_sums_size < static_cast<size_t>(grid_size)) {
-        if (d_persistent_partial_sums) {
-            cudaFree(d_persistent_partial_sums);
-        }
-        persistent_partial_sums_size = static_cast<size_t>(grid_size) * 2;
-        CUDA_CHECK(cudaMalloc(&d_persistent_partial_sums,
-                              persistent_partial_sums_size * sizeof(float)));
-    }
-    
-    size_t shared_mem = block_size * sizeof(float);
-    
-    // Compute MSE loss
-    mse_loss_kernel<<<grid_size, block_size, shared_mem, stream>>>(
-        output.d_data, target.d_data, d_persistent_partial_sums, n);
-    CUDA_CHECK(cudaGetLastError());
-    
-    // Accumulate on GPU - NO HOST SYNC!
-    accumulate_loss_kernel<<<1, 1, 0, stream>>>(
-        d_epoch_loss, d_persistent_partial_sums, grid_size);
-    CUDA_CHECK(cudaGetLastError());
-}
-
-// Modified: compute gradient and accumulate loss on GPU
-void gpu_mse_loss_with_grad_accumulate(const GPUTensor4D &output,
-                                       const GPUTensor4D &target,
-                                       GPUTensor4D &grad_output,
-                                       float* d_epoch_loss,
-                                       cudaStream_t stream) {
-    size_t n = output.size();
-    if (grad_output.n != output.n || grad_output.c != output.c ||
-        grad_output.h != output.h || grad_output.w != output.w) {
-        grad_output.allocate(output.n, output.c, output.h, output.w);
-    }
-    
-    float scale = 1024.0f / static_cast<float>(n);
-    int block_size = 256;
-    int grid_size = (n + block_size - 1) / block_size;
-    
-    // Compute gradient
-    mse_grad_kernel<<<grid_size, block_size, 0, stream>>>(
-        output.d_data, target.d_data, grad_output.d_data, scale, n);
-    CUDA_CHECK(cudaGetLastError());
-    
-    // Accumulate loss on GPU
-    gpu_mse_loss_accumulate(output, target, d_epoch_loss, stream);
-}
-
-// Helper function to initialize epoch loss accumulator
-void init_epoch_loss_accumulator(float** d_epoch_loss) {
-    if (d_epoch_loss_accumulator == nullptr) {
-        CUDA_CHECK(cudaMalloc(&d_epoch_loss_accumulator, sizeof(float)));
-        epoch_loss_accumulator_size = 1;
-    }
-    *d_epoch_loss = d_epoch_loss_accumulator;
-}
-
-// Helper function to reset epoch loss
-void reset_epoch_loss(float* d_epoch_loss, cudaStream_t stream) {
-    CUDA_CHECK(cudaMemsetAsync(d_epoch_loss, 0, sizeof(float), stream));
-}
-
-// Helper function to get accumulated loss
-float get_epoch_loss(float* d_epoch_loss, size_t total_elements) {
-    float h_loss;
-    CUDA_CHECK(cudaMemcpy(&h_loss, d_epoch_loss, sizeof(float), cudaMemcpyDeviceToHost));
-    return h_loss / static_cast<float>(total_elements);
-}
-
-// Cleanup function
-void cleanup_epoch_loss_accumulator() {
-    if (d_epoch_loss_accumulator) {
-        cudaFree(d_epoch_loss_accumulator);
-        d_epoch_loss_accumulator = nullptr;
-        epoch_loss_accumulator_size = 0;
-    }
+  // Reuse pinned host buffer for MSE calculation
+  return gpu_mse_loss(output, target, h_partial_sums, stream);
 }

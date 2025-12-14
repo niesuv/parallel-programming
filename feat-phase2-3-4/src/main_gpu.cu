@@ -1,3 +1,22 @@
+/**
+ * @file main_gpu.cu
+ * @brief GPU Autoencoder Training & SVM Classification Entry Point
+ *
+ * Main program for GPU-accelerated autoencoder training.
+ * Optionally performs SVM classification on extracted features.
+ *
+ * Usage:
+ *   ./full_pipeline --epochs 10 --data ./data/cifar-10-batches-bin
+ *   ./full_pipeline --load-weights model.weights --svm-only --data ./data
+ *
+ * Features:
+ * - CUDA GPU training with async streams
+ * - Weight save/load in binary format
+ * - Feature extraction from encoder
+ * - SVM classification (WITH_SVM flag)
+ * - Detailed logging with timing
+ */
+
 #include <algorithm>
 #include <chrono>
 #include <ctime>
@@ -322,6 +341,7 @@ int main(int argc, char **argv) {
   std::string weights_load_path;
   std::string weights_save_path = "autoencoder_gpu.weights";
   int device_id = 0;
+  bool svm_only = false; // Skip training, only run SVM
 
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
@@ -345,6 +365,8 @@ int main(int argc, char **argv) {
       weights_save_path = argv[++i];
     } else if (arg == "--device" && i + 1 < argc) {
       device_id = std::stoi(argv[++i]);
+    } else if (arg == "--svm-only") {
+      svm_only = true;
     } else if (arg == "--help" || arg == "-h") {
       std::cout
           << "Usage: " << argv[0] << " [options]\n"
@@ -359,6 +381,8 @@ int main(int argc, char **argv) {
           << "  --load-weights <f>   Load weights from file\n"
           << "  --save-weights <f>   Save weights to file\n"
           << "  --device <n>         GPU device ID (default: 0)\n"
+          << "  --svm-only           Skip training, only run SVM (requires "
+             "--load-weights)\n"
           << "  --help               Show this help\n";
       return 0;
     }
@@ -449,6 +473,7 @@ int main(int argc, char **argv) {
                 << std::endl;
       logger.log("WARNING: Failed to load weights, starting fresh");
     } else {
+      std::cout << "  Weights loaded successfully!" << std::endl;
       logger.log("Weights loaded successfully");
     }
   }
@@ -460,17 +485,21 @@ int main(int argc, char **argv) {
   std::mt19937 rng(42);
 
   GPUTensor4D gpu_batch(batch_size, 3, 32, 32);
+  GPUTensor4D gpu_output;
 
   const int n_buffers = 4;
-  float* h_batch[n_buffers];
+  float *h_batch[n_buffers];
   cudaStream_t streams[n_buffers];
-  //cudaEvent_t events[n_buffers];
+  cudaEvent_t events[n_buffers];
 
   for (int i = 0; i < n_buffers; ++i) {
-      CUDA_CHECK(cudaMallocHost(&h_batch[i], batch_size * 3 * 32 * 32 * sizeof(float)));
-      CUDA_CHECK(cudaStreamCreate(&streams[i]));
-      //CUDA_CHECK(cudaEventCreateWithFlags(&events[i], cudaEventDisableTiming));
+    CUDA_CHECK(
+        cudaMallocHost(&h_batch[i], batch_size * 3 * 32 * 32 * sizeof(float)));
+    CUDA_CHECK(cudaStreamCreate(&streams[i]));
+    CUDA_CHECK(cudaEventCreateWithFlags(&events[i], cudaEventDisableTiming));
   }
+
+  std::vector<float> batch_losses(num_batches, 0.0f);
 
   std::cout << "\n=== Starting Training ===" << std::endl;
   std::cout << "Epochs: " << epochs << ", LR: " << learning_rate << std::endl;
@@ -485,121 +514,125 @@ int main(int argc, char **argv) {
   float best_loss = std::numeric_limits<float>::max();
   std::vector<float> epoch_losses;
 
-  float* d_epoch_loss = nullptr;
-  init_epoch_loss_accumulator(&d_epoch_loss); 
+  size_t n_elements = batch_size * 3 * 32 * 32; // ví dụ CIFAR-10
+  int grid_size = (n_elements + 256 * 2 - 1) / (256 * 2);
+  float *h_partial_sums = nullptr;
+  CUDA_CHECK(cudaMallocHost(&h_partial_sums, grid_size * sizeof(float)));
 
   float gamma = 0.95f;
-  size_t elements_per_batch = batch_size * 3 * 32 * 32;
 
-  for (int epoch = 0; epoch < epochs; ++epoch) {
-    std::shuffle(indices.begin(), indices.end(), rng);
-    logger.log_epoch_start(epoch + 1, epochs);
+  // Skip training if --svm-only flag is set
+  if (!svm_only) {
+    for (int epoch = 0; epoch < epochs; ++epoch) {
+      std::shuffle(indices.begin(), indices.end(), rng);
+      logger.log_epoch_start(epoch + 1, epochs);
 
-    // Reset loss accumulator at start of epoch
-    reset_epoch_loss(d_epoch_loss);
-    
-    auto epoch_start = std::chrono::high_resolution_clock::now();
+      float epoch_loss = 0.0f;
+      auto epoch_start = std::chrono::high_resolution_clock::now();
 
-    for (int batch_idx = 0; batch_idx < num_batches; ++batch_idx) {
+      for (int batch_idx = 0; batch_idx < num_batches; ++batch_idx) {
         int buf_idx = batch_idx % n_buffers;
-
-        // Wait for this buffer to be available
-        if (batch_idx >= n_buffers) {
-            cudaStreamSynchronize(streams[buf_idx]);
-        }
 
         auto batch_start = std::chrono::high_resolution_clock::now();
 
-        // Prepare data in pinned memory
+        // --- Chuẩn bị dữ liệu CPU vào pinned memory ---
         for (int b = 0; b < batch_size; ++b) {
-            int img_idx = indices[batch_idx * batch_size + b];
-            const float* src = train.images.data() + static_cast<size_t>(img_idx) * 3*32*32;
-            float* dst = h_batch[buf_idx] + static_cast<size_t>(b) * 3*32*32;
-            std::copy(src, src + 3*32*32, dst);
+          int img_idx = indices[batch_idx * batch_size + b];
+          const float *src =
+              train.images.data() + static_cast<size_t>(img_idx) * 3 * 32 * 32;
+          float *dst = h_batch[buf_idx] + static_cast<size_t>(b) * 3 * 32 * 32;
+          std::copy(src, src + 3 * 32 * 32, dst);
         }
 
-        // Copy async to GPU
+        // --- Copy async sang GPU ---
         gpu_batch.copy_from_host_async(h_batch[buf_idx], streams[buf_idx]);
 
-        // Train step - loss accumulates on GPU, no blocking!
-        autoencoder.train_step(gpu_batch, gpu_batch, learning_rate, 
-                              d_epoch_loss, streams[buf_idx]);
+        // --- Train step async trên cùng stream ---
+        float loss = autoencoder.train_step(gpu_batch, gpu_batch, learning_rate,
+                                            streams[buf_idx], h_partial_sums);
+        epoch_loss += loss;
+
+        // --- Đồng bộ nếu cần (có thể defer để pipeline) ---
+        cudaStreamSynchronize(streams[buf_idx]);
 
         auto batch_end = std::chrono::high_resolution_clock::now();
-        double batch_ms = std::chrono::duration<double, std::milli>(batch_end - batch_start).count();
+        double batch_ms =
+            std::chrono::duration<double, std::milli>(batch_end - batch_start)
+                .count();
 
-        // Show progress (no loss yet - that's at epoch end)
-        if (batch_idx % 100 == 0 || batch_idx == num_batches - 1) {
-            std::cout << "\r  Epoch " << (epoch + 1) << "/" << epochs
-                      << " | Batch " << (batch_idx + 1) << "/" << num_batches
-                      << " | " << std::setprecision(1) << batch_ms << " ms/batch"
-                      << std::flush;
+        // Logging
+        if ((batch_idx + 1) % 50 == 0 || batch_idx == num_batches - 1) {
+          logger.log_batch(batch_idx + 1, num_batches, loss, batch_ms);
+          logger.write_csv_batch(epoch + 1, batch_idx + 1, loss, batch_ms);
         }
+
+        if (batch_idx % 100 == 0 || batch_idx == num_batches - 1) {
+          // cudaStreamSynchronize(streams[buf_idx]);
+          std::cout << "\r  Epoch " << (epoch + 1) << "/" << epochs
+                    << " | Batch " << (batch_idx + 1) << "/" << num_batches
+                    << " | Loss: " << std::fixed << std::setprecision(4) << loss
+                    << " | " << std::setprecision(1) << batch_ms << " ms/batch"
+                    << std::flush;
+        }
+      }
+      learning_rate *= gamma;
+      auto epoch_end = std::chrono::high_resolution_clock::now();
+      double epoch_sec =
+          std::chrono::duration<double>(epoch_end - epoch_start).count();
+      float avg_loss = epoch_loss / num_batches;
+      epoch_losses.push_back(avg_loss);
+
+      bool is_best = avg_loss < best_loss;
+      if (is_best)
+        best_loss = avg_loss;
+
+      std::cout << std::endl
+                << "  Epoch " << (epoch + 1)
+                << " complete: Avg Loss = " << std::fixed
+                << std::setprecision(4) << avg_loss
+                << ", Time = " << std::setprecision(1) << epoch_sec << " sec"
+                << (is_best ? " [BEST]" : "") << std::endl;
+
+      logger.log_epoch_end(epoch + 1, epochs, avg_loss, epoch_sec, is_best,
+                           best_loss);
+      logger.write_csv_epoch(epoch + 1, avg_loss, epoch_sec, best_loss);
     }
-    
-    learning_rate *= gamma;
-    
-    // Sync all streams before getting final epoch loss
+    // --- Cleanup ---
     for (int i = 0; i < n_buffers; ++i) {
-        cudaStreamSynchronize(streams[i]);
-    }
-    
-    auto epoch_end = std::chrono::high_resolution_clock::now();
-    double epoch_sec = std::chrono::duration<double>(epoch_end - epoch_start).count();
-    
-    // Get accumulated loss for entire epoch
-    float avg_loss = get_epoch_loss(d_epoch_loss, num_batches * elements_per_batch);
-    epoch_losses.push_back(avg_loss);
-
-    bool is_best = avg_loss < best_loss;
-    if (is_best) best_loss = avg_loss;
-
-    std::cout << std::endl
-              << "  Epoch " << (epoch + 1) << " complete: Avg Loss = "
-              << std::fixed << std::setprecision(4) << avg_loss
-              << ", Time = " << std::setprecision(1) << epoch_sec << " sec"
-              << (is_best ? " [BEST]" : "") << std::endl;
-
-    logger.log_epoch_end(epoch + 1, epochs, avg_loss, epoch_sec, is_best, best_loss);
-    logger.write_csv_epoch(epoch + 1, avg_loss, epoch_sec, best_loss);
-  }
-
-  // Cleanup
-  for (int i = 0; i < n_buffers; ++i) {
       CUDA_CHECK(cudaFreeHost(h_batch[i]));
       CUDA_CHECK(cudaStreamDestroy(streams[i]));
-      //CUDA_CHECK(cudaEventDestroy(events[i]));
-  }
-  cleanup_epoch_loss_accumulator();
-
-  auto total_end = std::chrono::high_resolution_clock::now();
-  double total_sec =
-      std::chrono::duration<double>(total_end - total_start).count();
-
-  float final_avg_loss = 0.0f;
-  for (float l : epoch_losses) {
-    final_avg_loss += l;
-  }
-  final_avg_loss /= static_cast<float>(epoch_losses.size());
-
-  std::cout << "\n=== Training Complete ===" << std::endl;
-  std::cout << "Total time: " << std::fixed << std::setprecision(1) << total_sec
-            << " seconds" << std::endl;
-  std::cout << "Best loss: " << std::setprecision(6) << best_loss << std::endl;
-
-  if (!weights_save_path.empty()) {
-    std::cout << "Saving weights to: " << weights_save_path << std::endl;
-    if (autoencoder.save_weights(weights_save_path)) {
-      std::cout << "  Success!" << std::endl;
-      logger.log("Weights saved successfully to: " + weights_save_path);
-    } else {
-      std::cerr << "  Failed to save weights!" << std::endl;
-      logger.log("ERROR: Failed to save weights!");
     }
-  }
 
-  logger.log_training_complete(epochs, best_loss, final_avg_loss, total_sec,
-                               weights_save_path);
+    auto total_end = std::chrono::high_resolution_clock::now();
+    double total_sec =
+        std::chrono::duration<double>(total_end - total_start).count();
+
+    float final_avg_loss = 0.0f;
+    for (float l : epoch_losses) {
+      final_avg_loss += l;
+    }
+    final_avg_loss /= static_cast<float>(epoch_losses.size());
+
+    std::cout << "\n=== Training Complete ===" << std::endl;
+    std::cout << "Total time: " << std::fixed << std::setprecision(1)
+              << total_sec << " seconds" << std::endl;
+    std::cout << "Best loss: " << std::setprecision(6) << best_loss
+              << std::endl;
+
+    if (!weights_save_path.empty()) {
+      std::cout << "Saving weights to: " << weights_save_path << std::endl;
+      if (autoencoder.save_weights(weights_save_path)) {
+        std::cout << "  Success!" << std::endl;
+        logger.log("Weights saved successfully to: " + weights_save_path);
+      } else {
+        std::cerr << "  Failed to save weights!" << std::endl;
+        logger.log("ERROR: Failed to save weights!");
+      }
+    }
+
+    logger.log_training_complete(epochs, best_loss, final_avg_loss, total_sec,
+                                 weights_save_path);
+  } // end if (!svm_only)
 
 #ifdef WITH_SVM
   std::cout << "\n=== Feature Extraction & SVM Training ===" << std::endl;
@@ -624,6 +657,7 @@ int main(int argc, char **argv) {
         train.images.data() + static_cast<size_t>(i) * 3 * 32 * 32;
     single_image.copy_from_host(src);
     autoencoder.encode(single_image, latent, stream);
+    cudaStreamSynchronize(stream); // Wait for encode to complete!
     latent.copy_to_host(h_latent.data());
     std::copy(h_latent.begin(), h_latent.end(),
               train_features.begin() + static_cast<size_t>(i) * feature_dim);
@@ -647,6 +681,7 @@ int main(int argc, char **argv) {
         test.images.data() + static_cast<size_t>(i) * 3 * 32 * 32;
     single_image.copy_from_host(src);
     autoencoder.encode(single_image, latent, stream);
+    cudaStreamSynchronize(stream); // Wait for encode to complete!
     latent.copy_to_host(h_latent.data());
     std::copy(h_latent.begin(), h_latent.end(),
               test_features.begin() + static_cast<size_t>(i) * feature_dim);
@@ -677,6 +712,11 @@ int main(int argc, char **argv) {
   logger.log_svm_results(accuracy, effective_train, test.num_images,
                          feature_dim);
 #endif
+
+  // Giải phóng h_partial_sums
+  if (h_partial_sums) {
+    CUDA_CHECK(cudaFreeHost(h_partial_sums));
+  }
 
   // Note: cudaDeviceReset() removed to prevent errors in destructors
   // The CUDA runtime will clean up automatically on program exit
