@@ -372,7 +372,7 @@ void GPUConv2DLayer::forward(const GPUTensor4D &input,
 
 #ifdef USE_OPTIMIZED_KERNELS
   // Use shared memory tiled convolution for better performance
-  gpu_conv2d_forward_tiled(input, d_weights_, d_bias_, output, in_c_, out_c_,
+  gpu_conv2d_forward_tiled(input, d_weights_, d_bias_, output, col_buffer_, in_c_, out_c_,
                            k_, stride_, padding_, stream);
 #else
   dim3 block(16, 16);
@@ -401,11 +401,11 @@ void GPUConv2DLayer::forward_fused_relu(const GPUTensor4D &input,
 
 #ifdef USE_OPTIMIZED_KERNELS
   // Use optimized fused conv2d+bias+relu kernel for maximum performance
-  gpu_conv2d_relu_forward_opt(input, d_weights_, d_bias_, output, in_c_,
+  gpu_conv2d_relu_forward_opt(input, d_weights_, d_bias_, output, col_buffer_, in_c_,
                               out_c_, k_, stride_, padding_, stream);
 #else
   // Fallback: use standard forward then relu
-  forward(input, output);
+  forward(input, output, stream);
   // ReLU is applied separately - not ideal for non-optimized path
 #endif
 }
@@ -496,7 +496,8 @@ void GPUConv2DLayer::backward_fused_relu(const GPUTensor4D &input,
 #else
     // Fallback: tách riêng ReLU và Conv backward
     GPUTensor4D grad_relu(input.n, input.c, input.h, input.w);
-    relu_backward(input, grad_output, grad_relu, stream);
+    GPUReLULayer relu_layer;
+    relu_layer.backward(input, grad_output, grad_relu, stream);
     backward(input, grad_relu, grad_input, learning_rate, stream);
 #endif
 }

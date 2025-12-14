@@ -115,135 +115,11 @@ __global__ void conv2d_bias_relu_fused_kernel(
   output[((static_cast<size_t>(n) * out_c + oc) * out_h + oh) * out_w + ow] = fmaxf(0.0f, sum);
 }
 
-// Declare external kernel from layers_gpu.cu
-extern __global__ void relu_forward_kernel(const float *input, float *output,
-                                           size_t n);
+extern __global__ void relu_forward_kernel(const float *input, float *output, size_t n);
 
-__global__ void conv2d_forward_tiled_kernel(
-    const float *__restrict__ input, const float *__restrict__ weights,
-    const float *__restrict__ bias, float *__restrict__ output, int batch_size,
-    int in_c, int in_h, int in_w, int out_c, int out_h, int out_w, int k,
-    int stride, int padding)
-{
-  // Thêm padding để tránh shared memory bank conflict
-  const int tile_h = TILE_HEIGHT * stride + k - stride;
-  const int tile_w = TILE_WIDTH * stride + k - stride;
-  const int PAD = 1; // padding 1 cột
-  extern __shared__ float shared_mem[];
-
-  int ow = blockIdx.x * TILE_WIDTH + threadIdx.x;
-  int oh = blockIdx.y * TILE_HEIGHT + threadIdx.y;
-  int oc = blockIdx.z % out_c;
-  int n = blockIdx.z / out_c;
-
-  if (ow >= out_w || oh >= out_h || n >= batch_size)
-    return;
-
-  float sum = bias[oc];
-
-  const int tile_size = tile_h * (tile_w + PAD);
-  const int threads_per_block = blockDim.x * blockDim.y;
-  const int num_loads = (tile_size + threads_per_block - 1) / threads_per_block;
-  const int linear_tid = threadIdx.y * blockDim.x + threadIdx.x;
-
-  float *s_input = shared_mem;
-
-  for (int ic = 0; ic < in_c; ++ic)
-  {
-    const int in_start_h = blockIdx.y * TILE_HEIGHT * stride - padding;
-    const int in_start_w = blockIdx.x * TILE_WIDTH * stride - padding;
-    const size_t in_channel_offset =
-        (static_cast<size_t>(n) * in_c + ic) * in_h * in_w;
-
-#pragma unroll 4
-    for (int load = 0; load < num_loads; ++load)
-    {
-      int linear_idx = load * threads_per_block + linear_tid;
-      if (linear_idx < tile_size)
-      {
-        int sh = linear_idx / (tile_w + PAD);
-        int sw = linear_idx % (tile_w + PAD);
-        int ih = in_start_h + sh;
-        int iw = in_start_w + sw;
-        if (sw < tile_w && ih >= 0 && ih < in_h && iw >= 0 && iw < in_w)
-        {
-          s_input[sh * (tile_w + PAD) + sw] = input[in_channel_offset + ih * in_w + iw];
-        }
-        else
-        {
-          s_input[sh * (tile_w + PAD) + sw] = 0.0f;
-        }
-      }
-    }
-    __syncthreads();
-
-    const int local_h = threadIdx.y * stride;
-    const int local_w = threadIdx.x * stride;
-    const size_t w_ic_offset = (static_cast<size_t>(oc) * in_c + ic) * k * k;
-
-#pragma unroll
-    for (int kh = 0; kh < k; ++kh)
-    {
-#pragma unroll
-      for (int kw = 0; kw < k; ++kw)
-      {
-        sum += s_input[(local_h + kh) * (tile_w + PAD) + local_w + kw] *
-               weights[w_ic_offset + kh * k + kw];
-      }
-    }
-    __syncthreads();
-  }
-
-  size_t out_idx =
-      ((static_cast<size_t>(n) * out_c + oc) * out_h + oh) * out_w + ow;
-  output[out_idx] = sum;
-}
-
-__global__ void conv2d_relu_forward_kernel(
-    const float *__restrict__ input, const float *__restrict__ weights,
-    const float *__restrict__ bias, float *__restrict__ output, int batch_size,
-    int in_c, int in_h, int in_w, int out_c, int out_h, int out_w, int k,
-    int stride, int padding)
-{
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  int total_outputs = batch_size * out_c * out_h * out_w;
-
-  if (idx >= total_outputs)
-    return;
-
-  int ow = idx % out_w;
-  int temp = idx / out_w;
-  int oh = temp % out_h;
-  temp = temp / out_h;
-  int oc = temp % out_c;
-  int n = temp / out_c;
-
-  float sum = bias[oc];
-
-#pragma unroll 4
-  for (int ic = 0; ic < in_c; ++ic)
-  {
-    for (int kh = 0; kh < k; ++kh)
-    {
-      for (int kw = 0; kw < k; ++kw)
-      {
-        int ih = oh * stride + kh - padding;
-        int iw = ow * stride + kw - padding;
-
-        if (ih >= 0 && ih < in_h && iw >= 0 && iw < in_w)
-        {
-          size_t in_idx =
-              ((static_cast<size_t>(n) * in_c + ic) * in_h + ih) * in_w + iw;
-          size_t w_idx =
-              ((static_cast<size_t>(oc) * in_c + ic) * k + kh) * k + kw;
-          sum += input[in_idx] * weights[w_idx];
-        }
-      }
-    }
-  }
-
-  output[idx] = fmaxf(0.0f, sum);
-}
+// ============================================================================
+// RESTORED KERNELS & FUNCTIONS
+// ============================================================================
 
 __global__ void relu_forward_vectorized_kernel(const float4 *input,
                                                float4 *output, size_t n4)
@@ -343,53 +219,6 @@ __global__ void upsample2d_forward_opt_kernel(const float *__restrict__ input,
   output[out_idx] = input[in_idx];
 }
 
-__global__ void mse_loss_grad_fused_kernel(const float *__restrict__ output,
-                                           const float *__restrict__ target,
-                                           float *__restrict__ grad_output,
-                                           float *__restrict__ partial_loss,
-                                           float scale, size_t n)
-{
-  extern __shared__ float sdata[];
-
-  size_t tid = threadIdx.x;
-  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-  float local_loss = 0.0f;
-
-  // Process element and compute gradient simultaneously
-  if (idx < n)
-  {
-    float diff = output[idx] - target[idx];
-    local_loss = diff * diff;
-    grad_output[idx] = scale * diff;
-  }
-
-  sdata[tid] = local_loss;
-  __syncthreads();
-
-  // Optimized reduction with better synchronization
-  for (unsigned int s = blockDim.x / 2; s > 32; s >>= 1)
-  {
-    if (tid < s)
-      sdata[tid] += sdata[tid + s];
-    __syncthreads();
-  }
-
-  // Warp-level reduction without volatile
-  if (tid < 32)
-  {
-    float val = sdata[tid];
-    if (blockDim.x >= 64)
-      val += sdata[tid + 32];
-
-    for (int offset = 16; offset > 0; offset >>= 1)
-      val += __shfl_down_sync(0xffffffff, val, offset);
-
-    if (tid == 0)
-      partial_loss[blockIdx.x] = val;
-  }
-}
-
 void gpu_relu_forward_opt(const GPUTensor4D &input, GPUTensor4D &output, cudaStream_t stream)
 {
   size_t n = input.size();
@@ -405,7 +234,7 @@ void gpu_relu_forward_opt(const GPUTensor4D &input, GPUTensor4D &output, cudaStr
   {
     int block_size = 256;
     int grid_size = (n4 + block_size - 1) / block_size;
-    relu_forward_vectorized_kernel<<<grid_size, block_size>>>(
+    relu_forward_vectorized_kernel<<<grid_size, block_size, 0, stream>>>(
         reinterpret_cast<const float4 *>(input.d_data),
         reinterpret_cast<float4 *>(output.d_data), n4);
   }
@@ -488,66 +317,159 @@ void gpu_upsample2d_forward_opt(const GPUTensor4D &input, GPUTensor4D &output,
   CUDA_CHECK(cudaGetLastError());
 }
 
-void gpu_conv2d_relu_forward_opt(const GPUTensor4D &input,
-                                 const float *d_weights, const float *d_bias,
-                                 GPUTensor4D &output, int in_c, int out_c,
-                                 int k, int stride, int padding, cudaStream_t stream)
-{
-  int out_h = (input.h + 2 * padding - k) / stride + 1;
-  int out_w = (input.w + 2 * padding - k) / stride + 1;
+// ============================================================================
+// IM2COL + GEMM KERNELS
+// ============================================================================
 
-  if (output.n != input.n || output.c != out_c || output.h != out_h ||
-      output.w != out_w)
-  {
-    output.allocate(input.n, out_c, out_h, out_w);
-  }
+__global__ void im2col_kernel(const float* data_im, float* data_col,
+                              int channels, int height, int width,
+                              int ksize, int stride, int pad,
+                              int out_h, int out_w) {
+    int n = channels * ksize * ksize * out_h * out_w;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx >= n) return;
+    
+    int spatial_dim = out_h * out_w;
+    int c_row = idx / spatial_dim;
+    int spatial_col = idx % spatial_dim;
+    
+    int w_offset = c_row % ksize;
+    int h_offset = (c_row / ksize) % ksize;
+    int c_im = c_row / (ksize * ksize);
+    
+    int w_out = spatial_col % out_w;
+    int h_out = spatial_col / out_w;
+    
+    int h_in = h_out * stride - pad + h_offset;
+    int w_in = w_out * stride - pad + w_offset;
+    
+    float val = 0.0f;
+    if (h_in >= 0 && h_in < height && w_in >= 0 && w_in < width) {
+        val = data_im[(c_im * height + h_in) * width + w_in];
+    }
+    data_col[idx] = val;
+}
 
-  // Optimize: Use constant memory for small weight tensors
-  bool use_const = false;
-  if (out_c <= 256 && in_c * k * k * out_c <= 8192)
-  {
-    CUDA_CHECK(cudaMemcpyToSymbol(c_weights_small, d_weights, in_c * k * k * out_c * sizeof(float)));
-    CUDA_CHECK(cudaMemcpyToSymbol(c_bias_small, d_bias, out_c * sizeof(float)));
-    use_const = true;
-  }
+template <bool FusedReLU>
+__global__ void gemm_bias_kernel(const float* A, const float* B, const float* bias, float* C,
+                                 int M, int N, int K) {
+    const int TS = 32;
+    int row = blockIdx.y * TS + threadIdx.y;
+    int col = blockIdx.x * TS + threadIdx.x;
+    
+    __shared__ float As[TS][TS];
+    __shared__ float Bs[TS][TS];
+    
+    float sum = 0.0f;
+    
+    for (int t = 0; t < (K + TS - 1) / TS; ++t) {
+        if (row < M && t * TS + threadIdx.x < K)
+            As[threadIdx.y][threadIdx.x] = A[row * K + t * TS + threadIdx.x];
+        else
+            As[threadIdx.y][threadIdx.x] = 0.0f;
+            
+        if (col < N && t * TS + threadIdx.y < K)
+            Bs[threadIdx.y][threadIdx.x] = B[(t * TS + threadIdx.y) * N + col];
+        else
+            Bs[threadIdx.y][threadIdx.x] = 0.0f;
+            
+        __syncthreads();
+        
+        for (int i = 0; i < TS; ++i)
+            sum += As[threadIdx.y][i] * Bs[i][threadIdx.x];
+            
+        __syncthreads();
+    }
+    
+    if (row < M && col < N) {
+        float val = sum + bias[row];
+        if (FusedReLU) val = fmaxf(0.0f, val);
+        C[row * N + col] = val;
+    }
+}
 
-  dim3 block(TILE_WIDTH, TILE_HEIGHT);
-  dim3 grid((out_w + TILE_WIDTH - 1) / TILE_WIDTH,
-            (out_h + TILE_HEIGHT - 1) / TILE_HEIGHT, input.n * out_c);
-  int tile_h = TILE_HEIGHT * stride + k - stride;
-  int tile_w = TILE_WIDTH * stride + k - stride;
-  size_t shared_size = tile_h * (tile_w + 1) * sizeof(float);
-  conv2d_bias_relu_fused_kernel<<<grid, block, shared_size, stream>>>(
-      input.d_data, d_weights, d_bias, output.d_data, input.n, in_c, input.h,
-      input.w, out_c, out_h, out_w, k, stride, padding, use_const);
-  CUDA_CHECK(cudaGetLastError());
+
+// Shared helper for invoking kernels
+void gpu_conv2d_im2col_gemm(const GPUTensor4D &input, const float *d_weights,
+                            const float *d_bias, GPUTensor4D &output,
+                            GPUTensor4D &col_buffer,
+                            int in_c, int out_c, int k, int stride,
+                            int padding, bool relu, cudaStream_t stream) {
+    
+    int out_h = (input.h + 2 * padding - k) / stride + 1;
+    int out_w = (input.w + 2 * padding - k) / stride + 1;
+
+    if (output.n != input.n || output.c != out_c || output.h != out_h || output.w != out_w) {
+        output.allocate(input.n, out_c, out_h, out_w);
+    }
+
+    // im2col parameters
+    int col_h = in_c * k * k; // K in GEMM
+    int col_w = out_h * out_w; // N in GEMM
+    
+    // Ensure col_buffer size
+    if (col_buffer.size() < (size_t)col_h * col_w) {
+        // Allocate enough for one image's column matrix
+        col_buffer.allocate(1, 1, col_h, col_w);
+    }
+    
+    // GEMM dimensions
+    // A: Weights (out_c, col_h) -> M x K
+    // B: Col (col_h, col_w) -> K x N
+    // C: Output (out_c, col_w) -> M x N
+    int M = out_c;
+    int N = col_w;
+    int K = col_h;
+    
+    dim3 gemm_block(32, 32);
+    dim3 gemm_grid((N + 31) / 32, (M + 31) / 32);
+    
+    int im2col_size = col_h * col_w;
+    int im2col_blocks = (im2col_size + 255) / 256;
+
+    for (int n = 0; n < input.n; ++n) {
+        const float* img_ptr = input.d_data + n * input.c * input.h * input.w;
+        float* col_ptr = col_buffer.d_data;
+        float* out_ptr = output.d_data + n * output.c * output.h * output.w;
+        
+        // 1. Im2Col
+        im2col_kernel<<<im2col_blocks, 256, 0, stream>>>(
+            img_ptr, col_ptr, in_c, input.h, input.w, k, stride, padding, out_h, out_w
+        );
+        
+        // 2. GEMM
+        if (relu) {
+            gemm_bias_kernel<true><<<gemm_grid, gemm_block, 0, stream>>>(
+                d_weights, col_ptr, d_bias, out_ptr, M, N, K
+            );
+        } else {
+            gemm_bias_kernel<false><<<gemm_grid, gemm_block, 0, stream>>>(
+                d_weights, col_ptr, d_bias, out_ptr, M, N, K
+            );
+        }
+    }
+    CUDA_CHECK(cudaGetLastError());
 }
 
 void gpu_conv2d_forward_tiled(const GPUTensor4D &input, const float *d_weights,
                               const float *d_bias, GPUTensor4D &output,
+                              GPUTensor4D &col_buffer,
                               int in_c, int out_c, int k, int stride,
                               int padding, cudaStream_t stream)
 {
-  int out_h = (input.h + 2 * padding - k) / stride + 1;
-  int out_w = (input.w + 2 * padding - k) / stride + 1;
+    gpu_conv2d_im2col_gemm(input, d_weights, d_bias, output, col_buffer,
+                           in_c, out_c, k, stride, padding, false, stream);
+}
 
-  if (output.n != input.n || output.c != out_c || output.h != out_h ||
-      output.w != out_w)
-  {
-    output.allocate(input.n, out_c, out_h, out_w);
-  }
-
-  dim3 block(TILE_WIDTH, TILE_HEIGHT);
-  dim3 grid((out_w + TILE_WIDTH - 1) / TILE_WIDTH,
-            (out_h + TILE_HEIGHT - 1) / TILE_HEIGHT, input.n * out_c);
-
-  int tile_h = TILE_HEIGHT * stride + k - stride;
-  int tile_w = TILE_WIDTH * stride + k - stride;
-  size_t shared_size = tile_h * tile_w * sizeof(float);
-  conv2d_forward_tiled_kernel<<<grid, block, shared_size, stream>>>(
-      input.d_data, d_weights, d_bias, output.d_data, input.n, in_c, input.h,
-      input.w, out_c, out_h, out_w, k, stride, padding);
-  CUDA_CHECK(cudaGetLastError());
+void gpu_conv2d_relu_forward_opt(const GPUTensor4D &input,
+                                 const float *d_weights, const float *d_bias,
+                                 GPUTensor4D &output, GPUTensor4D &col_buffer,
+                                 int in_c, int out_c,
+                                 int k, int stride, int padding, cudaStream_t stream)
+{
+    gpu_conv2d_im2col_gemm(input, d_weights, d_bias, output, col_buffer,
+                           in_c, out_c, k, stride, padding, true, stream);
 }
 
 // ============================================================================

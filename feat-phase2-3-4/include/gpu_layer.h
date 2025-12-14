@@ -68,6 +68,7 @@ private:
   float *d_grad_weights_ = nullptr;
   float *d_grad_bias_ = nullptr;
   size_t weights_size_;
+  mutable GPUTensor4D col_buffer_;
 };
 
 class GPUReLULayer
@@ -127,11 +128,13 @@ void gpu_upsample2d_forward_opt(const GPUTensor4D &input, GPUTensor4D &output,
                                 int scale, cudaStream_t stream);
 void gpu_conv2d_forward_tiled(const GPUTensor4D &input, const float *d_weights,
                               const float *d_bias, GPUTensor4D &output,
+                              GPUTensor4D &col_buffer,
                               int in_c, int out_c, int k, int stride,
                               int padding, cudaStream_t stream);
 void gpu_conv2d_relu_forward_opt(const GPUTensor4D &input,
                                  const float *d_weights, const float *d_bias,
-                                 GPUTensor4D &output, int in_c, int out_c,
+                                 GPUTensor4D &output, GPUTensor4D &col_buffer,
+                                 int in_c, int out_c,
                                  int k, int stride, int padding, cudaStream_t stream);
 
 // Optimized backward pass functions

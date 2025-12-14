@@ -663,10 +663,7 @@ for (int epoch = 0; epoch < epochs; ++epoch) {
                          feature_dim);
 #endif
 
-  for (int i = 0; i < n_buffers; ++i) {
-    CUDA_CHECK(cudaFreeHost(h_batch[i]));
-    CUDA_CHECK(cudaStreamDestroy(streams[i]));
-  }
+
   
   // Giải phóng h_partial_sums
   if (h_partial_sums) {
