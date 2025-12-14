@@ -32,8 +32,8 @@
 
 struct SVMWrapper::Impl {
   std::unique_ptr<SVC> model;
-  double C = 10.0;
-  double gamma = -1.0; // -1 = auto (1/num_features)
+  double C = 15.0;
+  double gamma = -1.0; // -1 = scale (1/(num_features * variance))
   int kernel_type = 2; // RBF
 
   // Normalization parameters
@@ -125,12 +125,25 @@ void SVMWrapper::train(const float *features, const int *labels,
   // Set up SVM parameters
   SvmParam param;
   param.svm_type = SvmParam::C_SVC;
-  param.kernel_type = SvmParam::LINEAR; // LINEAR kernel is better for high-dim
+  param.kernel_type = SvmParam::RBF; // RBF kernel as recommended
   param.C = static_cast<float>(impl_->C);
 
-  // Auto gamma: 1/num_features
+  // Gamma calculation: 'scale' mode = 1/(num_features * variance)
   if (impl_->gamma < 0) {
-    param.gamma = 1.0f / feature_dim;
+    // Calculate variance of normalized features
+    double variance = 0.0;
+    for (int i = 0; i < num_samples; ++i) {
+      for (int j = 0; j < feature_dim; ++j) {
+        double val =
+            normalized_features[static_cast<size_t>(i) * feature_dim + j];
+        variance += val * val;
+      }
+    }
+    variance /= (static_cast<double>(num_samples) * feature_dim);
+    if (variance < 1e-8)
+      variance = 1.0;
+    param.gamma = static_cast<float>(1.0 / (feature_dim * variance));
+    std::cout << "  Gamma (scale): " << param.gamma << std::endl;
   } else {
     param.gamma = static_cast<float>(impl_->gamma);
   }
@@ -238,16 +251,21 @@ struct SVMWrapper::Impl {
   svm_parameter param;
   double gamma_value = 0.0;
 
+  // Normalization parameters (for standardization)
+  std::vector<double> mean;
+  std::vector<double> std_dev;
+  int feature_dim = 0;
+
   Impl() {
     param.svm_type = C_SVC;
     param.kernel_type = RBF;
     param.degree = 3;
     param.gamma = 0;
     param.coef0 = 0;
-    param.C = 10.0;
+    param.C = 15.0;
     param.nu = 0.5;
     param.eps = 1e-3;
-    param.cache_size = 200;
+    param.cache_size = 500; // Increased cache for better performance
     param.shrinking = 1;
     param.probability = 0;
     param.nr_weight = 0;
@@ -278,13 +296,73 @@ void SVMWrapper::train(const float *features, const int *labels,
                        int num_samples, int feature_dim) {
   std::cout << "Training LIBSVM (CPU) on " << num_samples << " samples, "
             << feature_dim << " features..." << std::endl;
+  std::cout << "  Kernel: RBF" << std::endl;
+  std::cout << "  C: " << impl_->param.C << std::endl;
 
-  if (impl_->gamma_value <= 0) {
-    impl_->param.gamma = 1.0 / feature_dim;
-  } else {
-    impl_->param.gamma = impl_->gamma_value;
+  // Store feature dimension
+  impl_->feature_dim = feature_dim;
+
+  // =========================================================================
+  // Feature Normalization (Standardization: mean=0, std=1)
+  // This is CRITICAL for RBF kernel performance!
+  // =========================================================================
+  std::cout << "  Normalizing features (standardization)..." << std::endl;
+
+  // Calculate mean for each feature
+  impl_->mean.assign(feature_dim, 0.0);
+  for (int i = 0; i < num_samples; ++i) {
+    for (int j = 0; j < feature_dim; ++j) {
+      impl_->mean[j] += features[static_cast<size_t>(i) * feature_dim + j];
+    }
+  }
+  for (int j = 0; j < feature_dim; ++j) {
+    impl_->mean[j] /= num_samples;
   }
 
+  // Calculate std deviation for each feature
+  impl_->std_dev.assign(feature_dim, 0.0);
+  for (int i = 0; i < num_samples; ++i) {
+    for (int j = 0; j < feature_dim; ++j) {
+      double diff =
+          features[static_cast<size_t>(i) * feature_dim + j] - impl_->mean[j];
+      impl_->std_dev[j] += diff * diff;
+    }
+  }
+  for (int j = 0; j < feature_dim; ++j) {
+    impl_->std_dev[j] = std::sqrt(impl_->std_dev[j] / num_samples);
+    if (impl_->std_dev[j] < 1e-8)
+      impl_->std_dev[j] = 1.0; // Avoid division by zero
+  }
+
+  // Create normalized features
+  std::vector<double> normalized(static_cast<size_t>(num_samples) *
+                                 feature_dim);
+  for (int i = 0; i < num_samples; ++i) {
+    for (int j = 0; j < feature_dim; ++j) {
+      size_t idx = static_cast<size_t>(i) * feature_dim + j;
+      normalized[idx] = (features[idx] - impl_->mean[j]) / impl_->std_dev[j];
+    }
+  }
+
+  // Calculate variance of normalized features for 'scale' gamma
+  if (impl_->gamma_value <= 0) {
+    double variance = 0.0;
+    for (size_t i = 0; i < normalized.size(); ++i) {
+      variance += normalized[i] * normalized[i];
+    }
+    variance /= normalized.size();
+    if (variance < 1e-8)
+      variance = 1.0;
+    impl_->param.gamma = 1.0 / (feature_dim * variance);
+    std::cout << "  Gamma (scale): " << impl_->param.gamma << std::endl;
+  } else {
+    impl_->param.gamma = impl_->gamma_value;
+    std::cout << "  Gamma: " << impl_->param.gamma << std::endl;
+  }
+
+  // =========================================================================
+  // Build SVM problem with normalized features
+  // =========================================================================
   svm_problem prob;
   prob.l = num_samples;
   prob.y = new double[num_samples];
@@ -294,10 +372,9 @@ void SVMWrapper::train(const float *features, const int *labels,
     prob.y[i] = static_cast<double>(labels[i]);
     prob.x[i] = new svm_node[feature_dim + 1];
 
-    const float *sample = features + static_cast<size_t>(i) * feature_dim;
     for (int j = 0; j < feature_dim; ++j) {
       prob.x[i][j].index = j + 1;
-      prob.x[i][j].value = static_cast<double>(sample[j]);
+      prob.x[i][j].value = normalized[static_cast<size_t>(i) * feature_dim + j];
     }
     prob.x[i][feature_dim].index = -1;
   }
@@ -335,6 +412,13 @@ std::vector<int> SVMWrapper::predict(const float *features, int num_samples,
     return predictions;
   }
 
+  // Check if normalization params are available
+  if (impl_->mean.empty() || impl_->std_dev.empty()) {
+    std::cerr
+        << "Warning: Normalization params not available, using raw features"
+        << std::endl;
+  }
+
   std::vector<svm_node> x(feature_dim + 1);
 
   for (int i = 0; i < num_samples; ++i) {
@@ -342,7 +426,13 @@ std::vector<int> SVMWrapper::predict(const float *features, int num_samples,
 
     for (int j = 0; j < feature_dim; ++j) {
       x[j].index = j + 1;
-      x[j].value = static_cast<double>(sample[j]);
+      // Apply normalization if available
+      if (!impl_->mean.empty() && j < static_cast<int>(impl_->mean.size())) {
+        x[j].value = (static_cast<double>(sample[j]) - impl_->mean[j]) /
+                     impl_->std_dev[j];
+      } else {
+        x[j].value = static_cast<double>(sample[j]);
+      }
     }
     x[feature_dim].index = -1;
 
@@ -387,7 +477,7 @@ bool SVMWrapper::load_model(const std::string &path) {
 #else
 
 struct SVMWrapper::Impl {
-  double C = 10.0;
+  double C = 15.0;
   double gamma = 0.0;
   int kernel_type = 2;
   bool trained = false;
