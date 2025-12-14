@@ -462,9 +462,14 @@ int main(int argc, char **argv) {
   GPUTensor4D gpu_batch(batch_size, 3, 32, 32);
   GPUTensor4D gpu_output;
 
-  const size_t h_batch_size = static_cast<size_t>(batch_size) * 3 * 32 * 32;
-  float *h_batch = nullptr;
-  CUDA_CHECK(cudaMallocHost(&h_batch, h_batch_size * sizeof(float)));
+  const int n_buffers = 4;
+  float* h_batch[n_buffers];
+  cudaStream_t streams[n_buffers];
+
+  for (int i = 0; i < n_buffers; ++i) {
+      CUDA_CHECK(cudaMallocHost(&h_batch[i], batch_size * 3 * 32 * 32 * sizeof(float)));
+      CUDA_CHECK(cudaStreamCreate(&streams[i]));
+  }
 
   std::cout << "\n=== Starting Training ===" << std::endl;
   std::cout << "Epochs: " << epochs << ", LR: " << learning_rate << std::endl;
@@ -479,69 +484,83 @@ int main(int argc, char **argv) {
   float best_loss = std::numeric_limits<float>::max();
   std::vector<float> epoch_losses;
 
-  for (int epoch = 0; epoch < epochs; ++epoch) {
+
+  size_t n_elements = batch_size * 3 * 32 * 32;  // ví dụ CIFAR-10
+  int grid_size = (n_elements + 256*2 - 1) / (256*2);
+  float* h_partial_sums = nullptr;
+  CUDA_CHECK(cudaMallocHost(&h_partial_sums, grid_size * sizeof(float)));
+
+for (int epoch = 0; epoch < epochs; ++epoch) {
     std::shuffle(indices.begin(), indices.end(), rng);
     logger.log_epoch_start(epoch + 1, epochs);
 
     float epoch_loss = 0.0f;
     auto epoch_start = std::chrono::high_resolution_clock::now();
 
-    for (int batch = 0; batch < num_batches; ++batch) {
-      auto batch_start = std::chrono::high_resolution_clock::now();
+    for (int batch_idx = 0; batch_idx < num_batches; ++batch_idx) {
+        int buf_idx = batch_idx % n_buffers;
 
-      for (int b = 0; b < batch_size; ++b) {
-        int img_idx = indices[batch * batch_size + b];
-        const float *src =
-            train.images.data() + static_cast<size_t>(img_idx) * 3 * 32 * 32;
-        float *dst = h_batch + static_cast<size_t>(b) * 3 * 32 * 32;
-        std::copy(src, src + 3 * 32 * 32, dst);
-      }
+        auto batch_start = std::chrono::high_resolution_clock::now();
 
-      gpu_batch.copy_from_host(h_batch);
+        // --- Chuẩn bị dữ liệu CPU vào pinned memory ---
+        for (int b = 0; b < batch_size; ++b) {
+            int img_idx = indices[batch_idx * batch_size + b];
+            const float* src = train.images.data() + static_cast<size_t>(img_idx) * 3*32*32;
+            float* dst = h_batch[buf_idx] + static_cast<size_t>(b) * 3*32*32;
+            std::copy(src, src + 3*32*32, dst);
+        }
 
-      float loss = autoencoder.train_step(gpu_batch, gpu_batch, learning_rate);
-      epoch_loss += loss;
+        // --- Copy async sang GPU ---
+        gpu_batch.copy_from_host_async(h_batch[buf_idx], streams[buf_idx]);
 
-      auto batch_end = std::chrono::high_resolution_clock::now();
-      double batch_ms =
-          std::chrono::duration<double, std::milli>(batch_end - batch_start)
-              .count();
+        // --- Train step async trên cùng stream ---
+        float loss = autoencoder.train_step(gpu_batch, gpu_batch, learning_rate, streams[buf_idx], h_partial_sums);
+        epoch_loss += loss;
 
-      if ((batch + 1) % 50 == 0 || batch == num_batches - 1) {
-        logger.log_batch(batch + 1, num_batches, loss, batch_ms);
-        logger.write_csv_batch(epoch + 1, batch + 1, loss, batch_ms);
-      }
+        // --- Đồng bộ nếu cần (có thể defer để pipeline) ---
+        // cudaStreamSynchronize(streams[buf_idx]);
 
-      if (batch % 100 == 0 || batch == num_batches - 1) {
-        std::cout << "\r  Epoch " << (epoch + 1) << "/" << epochs << " | Batch "
-                  << (batch + 1) << "/" << num_batches
-                  << " | Loss: " << std::fixed << std::setprecision(4) << loss
-                  << " | " << std::setprecision(1) << batch_ms << " ms/batch"
-                  << std::flush;
-      }
+        auto batch_end = std::chrono::high_resolution_clock::now();
+        double batch_ms = std::chrono::duration<double, std::milli>(batch_end - batch_start).count();
+
+        // Logging
+        if ((batch_idx + 1) % 50 == 0 || batch_idx == num_batches - 1) {
+            logger.log_batch(batch_idx + 1, num_batches, loss, batch_ms);
+            logger.write_csv_batch(epoch + 1, batch_idx + 1, loss, batch_ms);
+        }
+
+        if (batch_idx % 100 == 0 || batch_idx == num_batches - 1) {
+            cudaStreamSynchronize(streams[buf_idx]);
+            std::cout << "\r  Epoch " << (epoch + 1) << "/" << epochs
+                      << " | Batch " << (batch_idx + 1) << "/" << num_batches
+                      << " | Loss: " << std::fixed << std::setprecision(4) << loss
+                      << " | " << std::setprecision(1) << batch_ms << " ms/batch"
+                      << std::flush;
+        }
     }
 
     auto epoch_end = std::chrono::high_resolution_clock::now();
-    double epoch_sec =
-        std::chrono::duration<double>(epoch_end - epoch_start).count();
+    double epoch_sec = std::chrono::duration<double>(epoch_end - epoch_start).count();
     float avg_loss = epoch_loss / num_batches;
     epoch_losses.push_back(avg_loss);
 
     bool is_best = avg_loss < best_loss;
-    if (is_best) {
-      best_loss = avg_loss;
-    }
+    if (is_best) best_loss = avg_loss;
 
-    std::cout << std::endl;
-    std::cout << "  Epoch " << (epoch + 1) << " complete: "
-              << "Avg Loss = " << std::fixed << std::setprecision(4) << avg_loss
+    std::cout << std::endl
+              << "  Epoch " << (epoch + 1) << " complete: Avg Loss = "
+              << std::fixed << std::setprecision(4) << avg_loss
               << ", Time = " << std::setprecision(1) << epoch_sec << " sec"
               << (is_best ? " [BEST]" : "") << std::endl;
 
-    logger.log_epoch_end(epoch + 1, epochs, avg_loss, epoch_sec, is_best,
-                         best_loss);
+    logger.log_epoch_end(epoch + 1, epochs, avg_loss, epoch_sec, is_best, best_loss);
     logger.write_csv_epoch(epoch + 1, avg_loss, epoch_sec, best_loss);
-  }
+}
+  // --- Cleanup ---
+  for (int i = 0; i < n_buffers; ++i) {
+    CUDA_CHECK(cudaFreeHost(h_batch[i]));
+    CUDA_CHECK(cudaStreamDestroy(streams[i]));
+}
 
   auto total_end = std::chrono::high_resolution_clock::now();
   double total_sec =
@@ -644,7 +663,15 @@ int main(int argc, char **argv) {
                          feature_dim);
 #endif
 
-  CUDA_CHECK(cudaFreeHost(h_batch));
+  for (int i = 0; i < n_buffers; ++i) {
+    CUDA_CHECK(cudaFreeHost(h_batch[i]));
+    CUDA_CHECK(cudaStreamDestroy(streams[i]));
+  }
+  
+  // Giải phóng h_partial_sums
+  if (h_partial_sums) {
+    CUDA_CHECK(cudaFreeHost(h_partial_sums));
+  }
 
   // Note: cudaDeviceReset() removed to prevent errors in destructors
   // The CUDA runtime will clean up automatically on program exit

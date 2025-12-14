@@ -28,6 +28,7 @@ struct GPUTensor4D
 
   void copy_from_host(const float *h_data);
   void copy_to_host(float *h_data) const;
+  void copy_from_host_async(const float* h_data, cudaStream_t stream);
 };
 
 class GPUConv2DLayer
@@ -37,10 +38,10 @@ public:
                  int stride = 1, int padding = 1);
   ~GPUConv2DLayer();
 
-  void forward(const GPUTensor4D &input, GPUTensor4D &output) const;
-  void forward_fused_relu(const GPUTensor4D &input, GPUTensor4D &output) const;
+  void forward(const GPUTensor4D &input, GPUTensor4D &output, cudaStream_t stream) const;
+  void forward_fused_relu(const GPUTensor4D &input, GPUTensor4D &output, cudaStream_t stream) const;
   void backward(const GPUTensor4D &input, const GPUTensor4D &grad_output,
-                GPUTensor4D &grad_input, float learning_rate);
+                GPUTensor4D &grad_input, float learning_rate, cudaStream_t stream);
 
   void copy_weights_from_host(const float *h_weights, const float *h_bias);
   void copy_weights_to_host(float *h_weights, float *h_bias) const;
@@ -71,9 +72,9 @@ private:
 class GPUReLULayer
 {
 public:
-  void forward(const GPUTensor4D &input, GPUTensor4D &output) const;
+  void forward(const GPUTensor4D &input, GPUTensor4D &output, cudaStream_t stream) const;
   void backward(const GPUTensor4D &input, const GPUTensor4D &grad_output,
-                GPUTensor4D &grad_input) const;
+                GPUTensor4D &grad_input, cudaStream_t stream) const;
 };
 
 class GPUMaxPool2DLayer
@@ -81,9 +82,9 @@ class GPUMaxPool2DLayer
 public:
   explicit GPUMaxPool2DLayer(int kernel_size = 2, int stride = 2);
 
-  void forward(const GPUTensor4D &input, GPUTensor4D &output) const;
+  void forward(const GPUTensor4D &input, GPUTensor4D &output, cudaStream_t stream) const;
   void backward(const GPUTensor4D &input, const GPUTensor4D &grad_output,
-                GPUTensor4D &grad_input) const;
+                GPUTensor4D &grad_input, cudaStream_t stream) const;
 
   int get_output_h(int input_h) const { return (input_h - k_) / stride_ + 1; }
   int get_output_w(int input_w) const { return (input_w - k_) / stride_ + 1; }
@@ -97,9 +98,9 @@ class GPUUpSample2DLayer
 public:
   explicit GPUUpSample2DLayer(int scale = 2);
 
-  void forward(const GPUTensor4D &input, GPUTensor4D &output) const;
+  void forward(const GPUTensor4D &input, GPUTensor4D &output, cudaStream_t stream) const;
   void backward(const GPUTensor4D &input, const GPUTensor4D &grad_output,
-                GPUTensor4D &grad_input) const;
+                GPUTensor4D &grad_input, cudaStream_t stream) const;
 
   int get_output_h(int input_h) const { return input_h * scale_; }
   int get_output_w(int input_w) const { return input_w * scale_; }
@@ -108,45 +109,46 @@ private:
   int scale_;
 };
 
-float gpu_mse_loss(const GPUTensor4D &output, const GPUTensor4D &target);
+float gpu_mse_loss(const GPUTensor4D &output, const GPUTensor4D &target, float* h_partial_sums, cudaStream_t stream);
 float gpu_mse_loss_with_grad(const GPUTensor4D &output,
                              const GPUTensor4D &target,
-                             GPUTensor4D &grad_output);
+                             GPUTensor4D &grad_output, float* h_partial_sums,
+                             cudaStream_t stream);
 
 #ifdef USE_OPTIMIZED_KERNELS
-void gpu_relu_forward_opt(const GPUTensor4D &input, GPUTensor4D &output);
+void gpu_relu_forward_opt(const GPUTensor4D &input, GPUTensor4D &output, cudaStream_t stream);
 void gpu_relu_backward_opt(const GPUTensor4D &input,
                            const GPUTensor4D &grad_output,
-                           GPUTensor4D &grad_input);
+                           GPUTensor4D &grad_input, cudaStream_t stream);
 void gpu_maxpool2d_forward_opt(const GPUTensor4D &input, GPUTensor4D &output,
-                               int k, int stride);
+                               int k, int stride, cudaStream_t stream);
 void gpu_upsample2d_forward_opt(const GPUTensor4D &input, GPUTensor4D &output,
-                                int scale);
+                                int scale, cudaStream_t stream);
 void gpu_conv2d_forward_tiled(const GPUTensor4D &input, const float *d_weights,
                               const float *d_bias, GPUTensor4D &output,
                               int in_c, int out_c, int k, int stride,
-                              int padding);
+                              int padding, cudaStream_t stream);
 void gpu_conv2d_relu_forward_opt(const GPUTensor4D &input,
                                  const float *d_weights, const float *d_bias,
                                  GPUTensor4D &output, int in_c, int out_c,
-                                 int k, int stride, int padding);
+                                 int k, int stride, int padding, cudaStream_t stream);
 
 // Optimized backward pass functions
 void gpu_conv2d_backward_data_opt(const GPUTensor4D &grad_output,
                                   const float *d_weights,
                                   GPUTensor4D &grad_input, int batch_size,
                                   int in_c, int in_h, int in_w, int out_c,
-                                  int k, int stride, int padding);
+                                  int k, int stride, int padding, cudaStream_t stream);
 void gpu_conv2d_backward_weights_opt(const GPUTensor4D &input,
                                      const GPUTensor4D &grad_output,
                                      float *d_grad_weights, float *d_grad_bias,
                                      int in_c, int out_c, int k, int stride,
-                                     int padding);
+                                     int padding, cudaStream_t stream);
 void gpu_maxpool2d_backward_opt(const GPUTensor4D &input,
                                 const GPUTensor4D &grad_output,
-                                GPUTensor4D &grad_input, int k, int stride);
+                                GPUTensor4D &grad_input, int k, int stride, cudaStream_t stream);
 void gpu_upsample2d_backward_opt(const GPUTensor4D &grad_output,
-                                 GPUTensor4D &grad_input, int scale);
+                                 GPUTensor4D &grad_input, int scale, cudaStream_t stream);
 #endif
 
 #endif // GPU_LAYER_H

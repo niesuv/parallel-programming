@@ -390,7 +390,7 @@ __global__ void mse_loss_grad_fused_kernel(const float *__restrict__ output,
   }
 }
 
-void gpu_relu_forward_opt(const GPUTensor4D &input, GPUTensor4D &output)
+void gpu_relu_forward_opt(const GPUTensor4D &input, GPUTensor4D &output, cudaStream_t stream)
 {
   size_t n = input.size();
   size_t n4 = n / 4;
@@ -413,7 +413,7 @@ void gpu_relu_forward_opt(const GPUTensor4D &input, GPUTensor4D &output)
   {
     int block_size = 256;
     int grid_size = (n + block_size - 1) / block_size;
-    relu_forward_kernel<<<grid_size, block_size>>>(input.d_data, output.d_data,
+    relu_forward_kernel<<<grid_size, block_size, 0, stream>>>(input.d_data, output.d_data,
                                                    n);
   }
   CUDA_CHECK(cudaGetLastError());
@@ -421,7 +421,7 @@ void gpu_relu_forward_opt(const GPUTensor4D &input, GPUTensor4D &output)
 
 void gpu_relu_backward_opt(const GPUTensor4D &input,
                            const GPUTensor4D &grad_output,
-                           GPUTensor4D &grad_input)
+                           GPUTensor4D &grad_input, cudaStream_t stream)
 {
   size_t n = input.size();
   size_t n4 = n / 4;
@@ -436,7 +436,7 @@ void gpu_relu_backward_opt(const GPUTensor4D &input,
   {
     int block_size = 256;
     int grid_size = (n4 + block_size - 1) / block_size;
-    relu_backward_vectorized_kernel<<<grid_size, block_size>>>(
+    relu_backward_vectorized_kernel<<<grid_size, block_size, 0, stream>>>(
         reinterpret_cast<const float4 *>(input.d_data),
         reinterpret_cast<const float4 *>(grad_output.d_data),
         reinterpret_cast<float4 *>(grad_input.d_data), n4);
@@ -445,7 +445,7 @@ void gpu_relu_backward_opt(const GPUTensor4D &input,
 }
 
 void gpu_maxpool2d_forward_opt(const GPUTensor4D &input, GPUTensor4D &output,
-                               int k, int stride)
+                               int k, int stride, cudaStream_t stream)
 {
   int out_h = (input.h - k) / stride + 1;
   int out_w = (input.w - k) / stride + 1;
@@ -460,14 +460,14 @@ void gpu_maxpool2d_forward_opt(const GPUTensor4D &input, GPUTensor4D &output,
   dim3 grid((out_w + block.x - 1) / block.x, (out_h + block.y - 1) / block.y,
             input.n * input.c);
 
-  maxpool2d_forward_opt_kernel<<<grid, block>>>(
+  maxpool2d_forward_opt_kernel<<<grid, block, 0, stream>>>(
       input.d_data, output.d_data, input.n, input.c, input.h, input.w, out_h,
       out_w, k, stride);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void gpu_upsample2d_forward_opt(const GPUTensor4D &input, GPUTensor4D &output,
-                                int scale)
+                                int scale, cudaStream_t stream)
 {
   int out_h = input.h * scale;
   int out_w = input.w * scale;
@@ -482,7 +482,7 @@ void gpu_upsample2d_forward_opt(const GPUTensor4D &input, GPUTensor4D &output,
   dim3 grid((out_w + block.x - 1) / block.x, (out_h + block.y - 1) / block.y,
             input.n * input.c);
 
-  upsample2d_forward_opt_kernel<<<grid, block>>>(input.d_data, output.d_data,
+  upsample2d_forward_opt_kernel<<<grid, block, 0, stream>>>(input.d_data, output.d_data,
                                                  input.n, input.c, input.h,
                                                  input.w, out_h, out_w, scale);
   CUDA_CHECK(cudaGetLastError());
@@ -491,7 +491,7 @@ void gpu_upsample2d_forward_opt(const GPUTensor4D &input, GPUTensor4D &output,
 void gpu_conv2d_relu_forward_opt(const GPUTensor4D &input,
                                  const float *d_weights, const float *d_bias,
                                  GPUTensor4D &output, int in_c, int out_c,
-                                 int k, int stride, int padding)
+                                 int k, int stride, int padding, cudaStream_t stream)
 {
   int out_h = (input.h + 2 * padding - k) / stride + 1;
   int out_w = (input.w + 2 * padding - k) / stride + 1;
@@ -517,7 +517,7 @@ void gpu_conv2d_relu_forward_opt(const GPUTensor4D &input,
   int tile_h = TILE_HEIGHT * stride + k - stride;
   int tile_w = TILE_WIDTH * stride + k - stride;
   size_t shared_size = tile_h * (tile_w + 1) * sizeof(float);
-  conv2d_bias_relu_fused_kernel<<<grid, block, shared_size>>>(
+  conv2d_bias_relu_fused_kernel<<<grid, block, shared_size, stream>>>(
       input.d_data, d_weights, d_bias, output.d_data, input.n, in_c, input.h,
       input.w, out_c, out_h, out_w, k, stride, padding, use_const);
   CUDA_CHECK(cudaGetLastError());
@@ -526,7 +526,7 @@ void gpu_conv2d_relu_forward_opt(const GPUTensor4D &input,
 void gpu_conv2d_forward_tiled(const GPUTensor4D &input, const float *d_weights,
                               const float *d_bias, GPUTensor4D &output,
                               int in_c, int out_c, int k, int stride,
-                              int padding)
+                              int padding, cudaStream_t stream)
 {
   int out_h = (input.h + 2 * padding - k) / stride + 1;
   int out_w = (input.w + 2 * padding - k) / stride + 1;
@@ -544,7 +544,7 @@ void gpu_conv2d_forward_tiled(const GPUTensor4D &input, const float *d_weights,
   int tile_h = TILE_HEIGHT * stride + k - stride;
   int tile_w = TILE_WIDTH * stride + k - stride;
   size_t shared_size = tile_h * tile_w * sizeof(float);
-  conv2d_forward_tiled_kernel<<<grid, block, shared_size>>>(
+  conv2d_forward_tiled_kernel<<<grid, block, shared_size, stream>>>(
       input.d_data, d_weights, d_bias, output.d_data, input.n, in_c, input.h,
       input.w, out_c, out_h, out_w, k, stride, padding);
   CUDA_CHECK(cudaGetLastError());
@@ -925,13 +925,13 @@ void gpu_conv2d_backward_data_opt(const GPUTensor4D &grad_output,
                                   const float *d_weights,
                                   GPUTensor4D &grad_input, int batch_size,
                                   int in_c, int in_h, int in_w, int out_c,
-                                  int k, int stride, int padding)
+                                  int k, int stride, int padding, cudaStream_t stream)
 {
   dim3 block(16, 16);
   dim3 grid((in_w + block.x - 1) / block.x, (in_h + block.y - 1) / block.y,
             batch_size * in_c);
 
-  conv2d_backward_data_opt_kernel<<<grid, block>>>(
+  conv2d_backward_data_opt_kernel<<<grid, block, 0, stream>>>(
       grad_output.d_data, d_weights, grad_input.d_data, batch_size, in_c, in_h,
       in_w, out_c, grad_output.h, grad_output.w, k, stride, padding);
   CUDA_CHECK(cudaGetLastError());
@@ -941,14 +941,14 @@ void gpu_conv2d_backward_weights_opt(const GPUTensor4D &input,
                                      const GPUTensor4D &grad_output,
                                      float *d_grad_weights, float *d_grad_bias,
                                      int in_c, int out_c, int k, int stride,
-                                     int padding)
+                                     int padding, cudaStream_t stream)
 {
   // Weights gradient
   int total_weights = out_c * in_c * k * k;
   int block_size = 256;
   int grid_size = (total_weights + block_size - 1) / block_size;
 
-  conv2d_backward_weights_opt_kernel<<<grid_size, block_size>>>(
+  conv2d_backward_weights_opt_kernel<<<grid_size, block_size, 0, stream>>>(
       input.d_data, grad_output.d_data, d_grad_weights, input.n, in_c, input.h,
       input.w, out_c, grad_output.h, grad_output.w, k, stride, padding);
   CUDA_CHECK(cudaGetLastError());
@@ -964,7 +964,7 @@ void gpu_conv2d_backward_weights_opt(const GPUTensor4D &input,
 
 void gpu_maxpool2d_backward_opt(const GPUTensor4D &input,
                                 const GPUTensor4D &grad_output,
-                                GPUTensor4D &grad_input, int k, int stride)
+                                GPUTensor4D &grad_input, int k, int stride, cudaStream_t stream)
 {
   CUDA_CHECK(cudaMemset(grad_input.d_data, 0, grad_input.bytes()));
 
@@ -972,21 +972,21 @@ void gpu_maxpool2d_backward_opt(const GPUTensor4D &input,
   dim3 grid((grad_output.w + block.x - 1) / block.x,
             (grad_output.h + block.y - 1) / block.y, input.n * input.c);
 
-  maxpool2d_backward_opt_kernel<<<grid, block>>>(
+  maxpool2d_backward_opt_kernel<<<grid, block, 0, stream>>>(
       input.d_data, grad_output.d_data, grad_input.d_data, input.n, input.c,
       input.h, input.w, grad_output.h, grad_output.w, k, stride);
   CUDA_CHECK(cudaGetLastError());
 }
 
 void gpu_upsample2d_backward_opt(const GPUTensor4D &grad_output,
-                                 GPUTensor4D &grad_input, int scale)
+                                 GPUTensor4D &grad_input, int scale, cudaStream_t stream)
 {
   dim3 block(16, 16);
   dim3 grid((grad_input.w + block.x - 1) / block.x,
             (grad_input.h + block.y - 1) / block.y,
             grad_input.n * grad_input.c);
 
-  upsample2d_backward_opt_kernel<<<grid, block>>>(
+  upsample2d_backward_opt_kernel<<<grid, block, 0, stream>>>(
       grad_output.d_data, grad_input.d_data, grad_input.n, grad_input.c,
       grad_input.h, grad_input.w, grad_output.h, grad_output.w, scale);
   CUDA_CHECK(cudaGetLastError());

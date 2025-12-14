@@ -30,67 +30,67 @@ void GPUAutoencoder::synchronize()
     CUDA_CHECK(cudaDeviceSynchronize());
 }
 
-void GPUAutoencoder::forward(const GPUTensor4D &input, GPUTensor4D &output)
+void GPUAutoencoder::forward(const GPUTensor4D &input, GPUTensor4D &output, cudaStream_t stream)
 {
     // Use fused conv+relu kernels for maximum performance
-    conv1_.forward_fused_relu(input, x2_);
-    pool1_.forward(x2_, x3_);
+    conv1_.forward_fused_relu(input, x2_, stream);
+    pool1_.forward(x2_, x3_, stream);
 
-    conv2_.forward_fused_relu(x3_, x5_);
-    pool2_.forward(x5_, x6_);
+    conv2_.forward_fused_relu(x3_, x5_, stream);
+    pool2_.forward(x5_, x6_, stream);
 
-    conv3_.forward_fused_relu(x6_, x8_);
-    up1_.forward(x8_, x9_);
+    conv3_.forward_fused_relu(x6_, x8_, stream);
+    up1_.forward(x8_, x9_, stream);
 
-    conv4_.forward_fused_relu(x9_, x11_);
-    up2_.forward(x11_, x12_);
+    conv4_.forward_fused_relu(x9_, x11_, stream);
+    up2_.forward(x11_, x12_, stream);
 
-    conv5_.forward(x12_, output);
+    conv5_.forward(x12_, output, stream);
 }
 
-void GPUAutoencoder::encode(const GPUTensor4D &input, GPUTensor4D &latent)
+void GPUAutoencoder::encode(const GPUTensor4D &input, GPUTensor4D &latent, cudaStream_t stream)
 {
-    conv1_.forward_fused_relu(input, x2_);
-    pool1_.forward(x2_, x3_);
+    conv1_.forward_fused_relu(input, x2_, stream);
+    pool1_.forward(x2_, x3_, stream);
 
-    conv2_.forward_fused_relu(x3_, x5_);
-    pool2_.forward(x5_, latent);
+    conv2_.forward_fused_relu(x3_, x5_, stream);
+    pool2_.forward(x5_, latent, stream);
 }
 
 float GPUAutoencoder::train_step(const GPUTensor4D &input, const GPUTensor4D &target,
-                                 float learning_rate)
+                                 float learning_rate, cudaStream_t stream, float* h_partial_sums)
 {
     // Forward pass with fused kernels
-    conv1_.forward_fused_relu(input, x2_);
-    pool1_.forward(x2_, x3_);
+    conv1_.forward_fused_relu(input, x2_, stream);
+    pool1_.forward(x2_, x3_, stream);
 
-    conv2_.forward_fused_relu(x3_, x5_);
-    pool2_.forward(x5_, x6_);
+    conv2_.forward_fused_relu(x3_, x5_, stream);
+    pool2_.forward(x5_, x6_, stream);
 
-    conv3_.forward_fused_relu(x6_, x8_);
-    up1_.forward(x8_, x9_);
+    conv3_.forward_fused_relu(x6_, x8_, stream);
+    up1_.forward(x8_, x9_, stream);
 
-    conv4_.forward_fused_relu(x9_, x11_);
-    up2_.forward(x11_, x12_);
+    conv4_.forward_fused_relu(x9_, x11_, stream);
+    up2_.forward(x11_, x12_, stream);
 
-    conv5_.forward(x12_, x13_);
+    conv5_.forward(x12_, x13_, stream);
 
-    float loss = gpu_mse_loss_with_grad(x13_, target, g13_);
+    float loss = gpu_mse_loss_with_grad(x13_, target, g13_, h_partial_sums, stream);
 
     // Backward pass
-    conv5_.backward(x12_, g13_, g12_, learning_rate);
-    up2_.backward(x11_, g12_, g11_);
-    relu4_.backward(x11_, g11_, g10_); // ReLU backward for conv4 output
-    conv4_.backward(x9_, g10_, g9_, learning_rate);
-    up1_.backward(x8_, g9_, g8_);
-    relu3_.backward(x8_, g8_, g7_); // ReLU backward for conv3 output
-    conv3_.backward(x6_, g7_, g6_, learning_rate);
-    pool2_.backward(x5_, g6_, g5_);
-    relu2_.backward(x5_, g5_, g4_); // ReLU backward for conv2 output
-    conv2_.backward(x3_, g4_, g3_, learning_rate);
-    pool1_.backward(x2_, g3_, g2_);
-    relu1_.backward(x2_, g2_, g1_); // ReLU backward for conv1 output
-    conv1_.backward(input, g1_, g0_, learning_rate);
+    conv5_.backward(x12_, g13_, g12_, learning_rate, stream);
+    up2_.backward(x11_, g12_, g11_, stream);
+    relu4_.backward(x11_, g11_, g10_, stream); // ReLU backward for conv4 output
+    conv4_.backward(x9_, g10_, g9_, learning_rate, stream);
+    up1_.backward(x8_, g9_, g8_, stream);
+    relu3_.backward(x8_, g8_, g7_, stream); // ReLU backward for conv3 output
+    conv3_.backward(x6_, g7_, g6_, learning_rate, stream);
+    pool2_.backward(x5_, g6_, g5_, stream);
+    relu2_.backward(x5_, g5_, g4_, stream); // ReLU backward for conv2 output
+    conv2_.backward(x3_, g4_, g3_, learning_rate, stream);
+    pool1_.backward(x2_, g3_, g2_, stream);
+    relu1_.backward(x2_, g2_, g1_, stream); // ReLU backward for conv1 output
+    conv1_.backward(input, g1_, g0_, learning_rate, stream);
 
     return loss;
 }
