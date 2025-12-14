@@ -797,7 +797,7 @@ __global__ void conv2d_relu_backward_data_opt_kernel(
         {
             const size_t go_oc_offset = go_base + oc * out_h * out_w;
             const size_t w_oc_base = (size_t)(oc * in_c + ic) * 9;
-
+#pragma unroll
             for (int kh = 0; kh < 3; ++kh)
             {
                 int oh = ih + padding - kh;
@@ -805,7 +805,7 @@ __global__ void conv2d_relu_backward_data_opt_kernel(
                 {
                     const size_t go_row = go_oc_offset + oh * out_w;
                     const size_t w_row = w_oc_base + kh * 3;
-
+#pragma unroll
                     for (int kw = 0; kw < 3; ++kw)
                     {
                         int ow = iw + padding - kw;

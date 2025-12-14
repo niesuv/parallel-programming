@@ -901,10 +901,8 @@ __global__ void mse_grad_kernel(const float *__restrict__ output,
                                 size_t n)
 {
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < n)
-  {
-    grad_output[idx] = scale * (output[idx] - target[idx]);
-  }
+  if (idx < n) grad_output[idx] = 2.0f * scale * (output[idx] - target[idx]);
+  
 }
 
 static float *d_persistent_partial_sums = nullptr;
@@ -963,6 +961,7 @@ float gpu_mse_loss_with_grad(const GPUTensor4D &output,
         grad_output.allocate(output.n, output.c, output.h, output.w);
     }
 
+    float scale = 1024.0f / static_cast<float>(n); // scale để loss và grad đồng bộ
     int block_size = 256;
     int grid_size = (n + block_size - 1) / block_size;
 

@@ -465,11 +465,15 @@ int main(int argc, char **argv) {
   const int n_buffers = 4;
   float* h_batch[n_buffers];
   cudaStream_t streams[n_buffers];
+  cudaEvent_t events[n_buffers];
 
   for (int i = 0; i < n_buffers; ++i) {
       CUDA_CHECK(cudaMallocHost(&h_batch[i], batch_size * 3 * 32 * 32 * sizeof(float)));
       CUDA_CHECK(cudaStreamCreate(&streams[i]));
+      CUDA_CHECK(cudaEventCreateWithFlags(&events[i], cudaEventDisableTiming));
   }
+
+  std::vector<float> batch_losses(num_batches, 0.0f);
 
   std::cout << "\n=== Starting Training ===" << std::endl;
   std::cout << "Epochs: " << epochs << ", LR: " << learning_rate << std::endl;
@@ -489,6 +493,9 @@ int main(int argc, char **argv) {
   int grid_size = (n_elements + 256*2 - 1) / (256*2);
   float* h_partial_sums = nullptr;
   CUDA_CHECK(cudaMallocHost(&h_partial_sums, grid_size * sizeof(float)));
+
+
+  float gamma = 0.95f;
 
 for (int epoch = 0; epoch < epochs; ++epoch) {
     std::shuffle(indices.begin(), indices.end(), rng);
@@ -518,7 +525,7 @@ for (int epoch = 0; epoch < epochs; ++epoch) {
         epoch_loss += loss;
 
         // --- Đồng bộ nếu cần (có thể defer để pipeline) ---
-        // cudaStreamSynchronize(streams[buf_idx]);
+        cudaStreamSynchronize(streams[buf_idx]);
 
         auto batch_end = std::chrono::high_resolution_clock::now();
         double batch_ms = std::chrono::duration<double, std::milli>(batch_end - batch_start).count();
@@ -530,7 +537,7 @@ for (int epoch = 0; epoch < epochs; ++epoch) {
         }
 
         if (batch_idx % 100 == 0 || batch_idx == num_batches - 1) {
-            cudaStreamSynchronize(streams[buf_idx]);
+            //cudaStreamSynchronize(streams[buf_idx]);
             std::cout << "\r  Epoch " << (epoch + 1) << "/" << epochs
                       << " | Batch " << (batch_idx + 1) << "/" << num_batches
                       << " | Loss: " << std::fixed << std::setprecision(4) << loss
@@ -538,7 +545,7 @@ for (int epoch = 0; epoch < epochs; ++epoch) {
                       << std::flush;
         }
     }
-
+    learning_rate *= gamma;
     auto epoch_end = std::chrono::high_resolution_clock::now();
     double epoch_sec = std::chrono::duration<double>(epoch_end - epoch_start).count();
     float avg_loss = epoch_loss / num_batches;
@@ -607,11 +614,13 @@ for (int epoch = 0; epoch < epochs; ++epoch) {
 
   std::cout << "Extracting training features..." << std::endl;
   logger.log("Extracting training features...");
+  cudaStream_t stream;
+  cudaStreamCreate(&stream);
   for (int i = 0; i < effective_train; ++i) {
     const float *src =
         train.images.data() + static_cast<size_t>(i) * 3 * 32 * 32;
     single_image.copy_from_host(src);
-    autoencoder.encode(single_image, latent);
+    autoencoder.encode(single_image, latent, stream);
     latent.copy_to_host(h_latent.data());
     std::copy(h_latent.begin(), h_latent.end(),
               train_features.begin() + static_cast<size_t>(i) * feature_dim);
@@ -634,7 +643,7 @@ for (int epoch = 0; epoch < epochs; ++epoch) {
     const float *src =
         test.images.data() + static_cast<size_t>(i) * 3 * 32 * 32;
     single_image.copy_from_host(src);
-    autoencoder.encode(single_image, latent);
+    autoencoder.encode(single_image, latent, stream);
     latent.copy_to_host(h_latent.data());
     std::copy(h_latent.begin(), h_latent.end(),
               test_features.begin() + static_cast<size_t>(i) * feature_dim);
@@ -646,6 +655,9 @@ for (int epoch = 0; epoch < epochs; ++epoch) {
     }
   }
   std::cout << std::endl;
+
+  cudaStreamSynchronize(stream);
+  cudaStreamDestroy(stream);
 
   std::cout << "Training SVM classifier..." << std::endl;
   logger.log("Training SVM classifier...");
@@ -663,7 +675,7 @@ for (int epoch = 0; epoch < epochs; ++epoch) {
                          feature_dim);
 #endif
 
-  
+
   // Giải phóng h_partial_sums
   if (h_partial_sums) {
     CUDA_CHECK(cudaFreeHost(h_partial_sums));
