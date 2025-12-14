@@ -412,11 +412,7 @@ void GPUConv2DLayer::forward_fused_relu(const GPUTensor4D &input,
 
 void GPUConv2DLayer::backward(const GPUTensor4D &input,
                               const GPUTensor4D &grad_output,
-                              GPUTensor4D &grad_input, float learning_rate, cudaStream_t stream)
-{
-  int out_h = grad_output.h;
-  int out_w = grad_output.w;
-
+                              GPUTensor4D &grad_input, float learning_rate, cudaStream_t stream){
   if (grad_input.n != input.n || grad_input.c != in_c_ ||
       grad_input.h != input.h || grad_input.w != input.w)
   {
@@ -433,6 +429,9 @@ void GPUConv2DLayer::backward(const GPUTensor4D &input,
                                   d_grad_bias_, in_c_, out_c_, k_, stride_,
                                   padding_, stream);
 #else
+
+  int out_h = grad_output.h;
+  int out_w = grad_output.w;
   int block_size = 256;
 
   int total_inputs = input.n * in_c_ * input.h * input.w;
@@ -469,6 +468,40 @@ void GPUConv2DLayer::backward(const GPUTensor4D &input,
       d_bias_, d_grad_bias_, learning_rate, out_c_);
   CUDA_CHECK(cudaGetLastError());
 }
+
+
+void GPUConv2DLayer::backward_fused_relu(const GPUTensor4D &input,
+                                        const GPUTensor4D &grad_output,
+                                        GPUTensor4D &grad_input,
+                                        float learning_rate,
+                                        cudaStream_t stream)
+{
+    // Đảm bảo grad_input được allocate đúng shape
+    if (grad_input.n != input.n || grad_input.c != in_c_ ||
+        grad_input.h != input.h || grad_input.w != input.w)
+    {
+        grad_input.allocate(input.n, in_c_, input.h, input.w);
+    }
+
+#ifdef USE_OPTIMIZED_KERNELS
+    // Fused kernel: ReLU backward + Conv2D backward data
+    gpu_conv2d_relu_backward_data_opt(grad_output, d_weights_, input, grad_input,
+                                      input.n, in_c_, input.h, input.w,
+                                      out_c_, k_, stride_, padding_, stream);
+
+    // Conv2D backward weights & bias (không cần ReLU)
+    gpu_conv2d_backward_weights_opt(input, grad_output, d_grad_weights_,
+                                    d_grad_bias_, in_c_, out_c_, k_, stride_,
+                                    padding_, stream);
+#else
+    // Fallback: tách riêng ReLU và Conv backward
+    GPUTensor4D grad_relu(input.n, input.c, input.h, input.w);
+    relu_backward(input, grad_output, grad_relu, stream);
+    backward(input, grad_relu, grad_input, learning_rate, stream);
+#endif
+}
+
+
 
 __global__ void relu_forward_kernel(const float *input, float *output,
                                     size_t n)

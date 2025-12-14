@@ -729,7 +729,6 @@ conv2d_backward_bias_opt_kernel(const float *__restrict__ grad_output,
   int oc = blockIdx.x;
   int tid = threadIdx.x;
   int total_spatial = batch_size * out_h * out_w;
-  const size_t oc_offset = static_cast<size_t>(oc) * out_h * out_w;
 
   // Optimized accumulation with better memory access patterns
   float sum = 0.0f;
@@ -768,6 +767,98 @@ conv2d_backward_bias_opt_kernel(const float *__restrict__ grad_output,
       grad_bias[oc] = val;
   }
 }
+
+__global__ void conv2d_relu_backward_data_opt_kernel(
+    const float *__restrict__ grad_output,
+    const float *__restrict__ weights,
+    const float *__restrict__ input,
+    float *__restrict__ grad_input,
+    int batch_size, int in_c, int in_h, int in_w,
+    int out_c, int out_h, int out_w,
+    int k, int stride, int padding)
+{
+    int iw = blockIdx.x * blockDim.x + threadIdx.x;
+    int ih = blockIdx.y * blockDim.y + threadIdx.y;
+    int ic_n = blockIdx.z;
+    int ic = ic_n % in_c;
+    int n = ic_n / in_c;
+
+    if (iw >= in_w || ih >= in_h || n >= batch_size)
+        return;
+
+    float sum = 0.0f;
+    const size_t gi_idx = ((size_t)n * in_c + ic) * in_h * in_w + ih * in_w + iw;
+    const size_t go_base = (size_t)n * out_c * out_h * out_w;
+
+    // Optimize for 3x3 kernel & stride 1
+    if (k == 3 && stride == 1)
+    {
+        for (int oc = 0; oc < out_c; ++oc)
+        {
+            const size_t go_oc_offset = go_base + oc * out_h * out_w;
+            const size_t w_oc_base = (size_t)(oc * in_c + ic) * 9;
+
+            for (int kh = 0; kh < 3; ++kh)
+            {
+                int oh = ih + padding - kh;
+                if (oh >= 0 && oh < out_h)
+                {
+                    const size_t go_row = go_oc_offset + oh * out_w;
+                    const size_t w_row = w_oc_base + kh * 3;
+
+                    for (int kw = 0; kw < 3; ++kw)
+                    {
+                        int ow = iw + padding - kw;
+                        if (ow >= 0 && ow < out_w)
+                        {
+                            // Fused ReLU: grad_output * (input > 0)
+                            float relu_grad = (input[((size_t)n*in_c + ic)*in_h*in_w + (ih)*in_w + iw] > 0.0f)
+                                               ? grad_output[go_row + ow] : 0.0f;
+                            sum += relu_grad * weights[w_row + kw];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    else
+    {
+        // General case: stride > 1
+        for (int oc = 0; oc < out_c; ++oc)
+        {
+            const size_t go_oc_offset = go_base + oc * out_h * out_w;
+            const size_t w_oc_base = (size_t)(oc * in_c + ic) * k * k;
+
+            for (int kh = 0; kh < k; ++kh)
+            {
+                int oh_check = ih + padding - kh;
+                if ((oh_check % stride == 0) && oh_check >= 0 && oh_check < out_h * stride)
+                {
+                    int oh = oh_check / stride;
+                    const size_t go_row = go_oc_offset + oh * out_w;
+                    const size_t w_row = w_oc_base + kh * k;
+
+                    for (int kw = 0; kw < k; ++kw)
+                    {
+                        int ow_check = iw + padding - kw;
+                        if ((ow_check % stride == 0) && ow_check >= 0 && ow_check < out_w * stride)
+                        {
+                            int ow = ow_check / stride;
+                            float relu_grad = (input[((size_t)n*in_c + ic)*in_h*in_w + ih*in_w + iw] > 0.0f)
+                                               ? grad_output[go_row + ow] : 0.0f;
+                            sum += relu_grad * weights[w_row + kw];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    grad_input[gi_idx] = sum;
+}
+
+
+
 
 // Optimized maxpool backward with 2D thread blocks
 __global__ void maxpool2d_backward_opt_kernel(
@@ -956,11 +1047,31 @@ void gpu_conv2d_backward_weights_opt(const GPUTensor4D &input,
   // Bias gradient with parallel reduction
   int bias_block = 256;
   size_t shared_size = bias_block * sizeof(float);
-  conv2d_backward_bias_opt_kernel<<<out_c, bias_block, shared_size>>>(
+  conv2d_backward_bias_opt_kernel<<<out_c, bias_block, shared_size, stream>>>(
       grad_output.d_data, d_grad_bias, input.n, out_c, grad_output.h,
       grad_output.w);
   CUDA_CHECK(cudaGetLastError());
 }
+
+void gpu_conv2d_relu_backward_data_opt(const GPUTensor4D &grad_output,
+                                      const float *d_weights,
+                                      const GPUTensor4D &input,
+                                      GPUTensor4D &grad_input,
+                                      int batch_size, int in_c, int in_h, int in_w,
+                                      int out_c, int k, int stride, int padding,
+                                      cudaStream_t stream)
+{
+    dim3 block(16, 16);
+    dim3 grid((in_w + block.x - 1) / block.x, (in_h + block.y - 1) / block.y,
+              batch_size * in_c);
+
+    conv2d_relu_backward_data_opt_kernel<<<grid, block, 0, stream>>>(
+        grad_output.d_data, d_weights, input.d_data, grad_input.d_data,
+        batch_size, in_c, in_h, in_w, out_c, grad_output.h, grad_output.w,
+        k, stride, padding);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 
 void gpu_maxpool2d_backward_opt(const GPUTensor4D &input,
                                 const GPUTensor4D &grad_output,
