@@ -8,6 +8,14 @@
 #include <cmath>
 #include <cstdio>
 #include <vector>
+#include <cstdlib>
+
+static float rand_normal()
+{
+  float u1 = (rand() + 1.0f) / (RAND_MAX + 2.0f);
+  float u2 = (rand() + 1.0f) / (RAND_MAX + 2.0f);
+  return sqrtf(-2.0f * logf(u1)) * cosf(2.0f * M_PI * u2);
+}
 
 // Add these global variables at the top of gpu_layer.cu
 static float* d_epoch_loss_accumulator = nullptr;
@@ -331,9 +339,25 @@ GPUConv2DLayer::GPUConv2DLayer(int in_channels, int out_channels,
   CUDA_CHECK(cudaMalloc(&d_grad_weights_, weights_size_ * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_grad_bias_, out_c_ * sizeof(float)));
 
-  CUDA_CHECK(cudaMemset(d_weights_, 0, weights_size_ * sizeof(float)));
+  // deterministic seed
+  srand(42);
+
+  std::vector<float> h_weights(weights_size_);
+  float scale = sqrtf(2.0f / (in_c_ * k_ * k_));
+
+  for (size_t i = 0; i < weights_size_; ++i)
+    h_weights[i] = scale * rand_normal();
+
+  CUDA_CHECK(cudaMemcpy(
+      d_weights_,
+      h_weights.data(),
+      weights_size_ * sizeof(float),
+      cudaMemcpyHostToDevice));
+
   CUDA_CHECK(cudaMemset(d_bias_, 0, out_c_ * sizeof(float)));
 }
+
+
 
 GPUConv2DLayer::~GPUConv2DLayer()
 {
@@ -443,20 +467,20 @@ void GPUConv2DLayer::backward(const GPUTensor4D &input,
 
   int total_inputs = input.n * in_c_ * input.h * input.w;
   int grid_inputs = (total_inputs + block_size - 1) / block_size;
-  conv2d_backward_data_kernel<<<grid_inputs, block_size>>>(
+  conv2d_backward_data_kernel<<<grid_inputs, block_size, 0, stream>>>(
       grad_output.d_data, d_weights_, grad_input.d_data, input.n, in_c_,
       input.h, input.w, out_c_, out_h, out_w, k_, stride_, padding_);
   CUDA_CHECK(cudaGetLastError());
 
   int total_weights = static_cast<int>(weights_size_);
   int grid_weights = (total_weights + block_size - 1) / block_size;
-  conv2d_backward_weights_kernel<<<grid_weights, block_size>>>(
+  conv2d_backward_weights_kernel<<<grid_weights, block_size, 0, stream>>>(
       input.d_data, grad_output.d_data, d_grad_weights_, d_grad_bias_, input.n,
       in_c_, input.h, input.w, out_c_, out_h, out_w, k_, stride_, padding_);
   CUDA_CHECK(cudaGetLastError());
 
   int grid_bias = (out_c_ + block_size - 1) / block_size;
-  conv2d_backward_bias_kernel<<<grid_bias, block_size>>>(
+  conv2d_backward_bias_kernel<<<grid_bias, block_size, 0, stream>>>(
       grad_output.d_data, d_grad_bias_, input.n, out_c_, out_h, out_w);
   CUDA_CHECK(cudaGetLastError());
 #endif
@@ -466,12 +490,12 @@ void GPUConv2DLayer::backward(const GPUTensor4D &input,
   size_t num_weights = weights_size_;
   int grid_w_update = (static_cast<int>(num_weights) + block_size_update - 1) /
                       block_size_update;
-  sgd_update_kernel<<<grid_w_update, block_size_update>>>(
+  sgd_update_kernel<<<grid_w_update, block_size_update, 0, stream>>>(
       d_weights_, d_grad_weights_, learning_rate, weights_size_);
   CUDA_CHECK(cudaGetLastError());
 
   int grid_b_update = (out_c_ + block_size_update - 1) / block_size_update;
-  sgd_update_kernel<<<grid_b_update, block_size_update>>>(
+  sgd_update_kernel<<<grid_b_update, block_size_update, 0, stream>>>(
       d_bias_, d_grad_bias_, learning_rate, out_c_);
   CUDA_CHECK(cudaGetLastError());
 }
@@ -506,6 +530,19 @@ void GPUConv2DLayer::backward_fused_relu(const GPUTensor4D &input,
     relu_backward(input, grad_output, grad_relu, stream);
     backward(input, grad_relu, grad_input, learning_rate, stream);
 #endif
+      // SGD update (same for both paths)
+    int block_size_update = 256;
+    size_t num_weights = weights_size_;
+    int grid_w_update = (static_cast<int>(num_weights) + block_size_update - 1) /
+                        block_size_update;
+    sgd_update_kernel<<<grid_w_update, block_size_update, 0, stream>>>(
+        d_weights_, d_grad_weights_, learning_rate, weights_size_);
+    CUDA_CHECK(cudaGetLastError());
+
+    int grid_b_update = (out_c_ + block_size_update - 1) / block_size_update;
+    sgd_update_kernel<<<grid_b_update, block_size_update, 0, stream>>>(
+        d_bias_, d_grad_bias_, learning_rate, out_c_);
+    CUDA_CHECK(cudaGetLastError());
 }
 
 
@@ -965,7 +1002,7 @@ float gpu_mse_loss_with_grad(const GPUTensor4D &output,
         grad_output.allocate(output.n, output.c, output.h, output.w);
     }
 
-    float scale = 1024.0f / static_cast<float>(n); // scale để loss và grad đồng bộ
+    float scale = 1.0f / static_cast<float>(n); // scale để loss và grad đồng bộ
     int block_size = 256;
     int grid_size = (n + block_size - 1) / block_size;
 
@@ -1033,7 +1070,7 @@ void gpu_mse_loss_with_grad_accumulate(const GPUTensor4D &output,
         grad_output.allocate(output.n, output.c, output.h, output.w);
     }
     
-    float scale = 1024.0f / static_cast<float>(n);
+    float scale = 1.0f / static_cast<float>(n);
     int block_size = 256;
     int grid_size = (n + block_size - 1) / block_size;
     
