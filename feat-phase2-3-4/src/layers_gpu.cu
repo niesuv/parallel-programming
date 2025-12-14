@@ -748,12 +748,12 @@ void GPUConv2DLayer::backward_fused_relu(const GPUTensor4D &input,
     }
 
 #ifdef USE_OPTIMIZED_KERNELS
-    // Fused kernel: ReLU backward + Conv2D backward data
+    // Original fused kernel: ReLU backward + Conv2D backward data
     gpu_conv2d_relu_backward_data_opt(grad_output, d_weights_, input, grad_input,
                                       input.n, in_c_, input.h, input.w,
                                       out_c_, k_, stride_, padding_, stream);
 
-    // Conv2D backward weights & bias (không cần ReLU)
+    // Conv2D backward weights & bias
     gpu_conv2d_backward_weights_opt(input, grad_output, d_grad_weights_,
                                     d_grad_bias_, in_c_, out_c_, k_, stride_,
                                     padding_, stream);
