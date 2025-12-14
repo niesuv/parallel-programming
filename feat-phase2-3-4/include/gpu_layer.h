@@ -3,7 +3,8 @@
 
 #include <cstddef>
 
-struct GPUTensor4D {
+struct GPUTensor4D
+{
   int n = 0;
   int c = 0;
   int h = 0;
@@ -29,23 +30,27 @@ struct GPUTensor4D {
   void copy_to_host(float *h_data) const;
 };
 
-class GPUConv2DLayer {
+class GPUConv2DLayer
+{
 public:
   GPUConv2DLayer(int in_channels, int out_channels, int kernel_size,
                  int stride = 1, int padding = 1);
   ~GPUConv2DLayer();
 
   void forward(const GPUTensor4D &input, GPUTensor4D &output) const;
+  void forward_fused_relu(const GPUTensor4D &input, GPUTensor4D &output) const;
   void backward(const GPUTensor4D &input, const GPUTensor4D &grad_output,
                 GPUTensor4D &grad_input, float learning_rate);
 
   void copy_weights_from_host(const float *h_weights, const float *h_bias);
   void copy_weights_to_host(float *h_weights, float *h_bias) const;
 
-  int get_output_h(int input_h) const {
+  int get_output_h(int input_h) const
+  {
     return (input_h + 2 * padding_ - k_) / stride_ + 1;
   }
-  int get_output_w(int input_w) const {
+  int get_output_w(int input_w) const
+  {
     return (input_w + 2 * padding_ - k_) / stride_ + 1;
   }
   int get_out_channels() const { return out_c_; }
@@ -63,14 +68,16 @@ private:
   size_t weights_size_;
 };
 
-class GPUReLULayer {
+class GPUReLULayer
+{
 public:
   void forward(const GPUTensor4D &input, GPUTensor4D &output) const;
   void backward(const GPUTensor4D &input, const GPUTensor4D &grad_output,
                 GPUTensor4D &grad_input) const;
 };
 
-class GPUMaxPool2DLayer {
+class GPUMaxPool2DLayer
+{
 public:
   explicit GPUMaxPool2DLayer(int kernel_size = 2, int stride = 2);
 
@@ -85,7 +92,8 @@ private:
   int k_, stride_;
 };
 
-class GPUUpSample2DLayer {
+class GPUUpSample2DLayer
+{
 public:
   explicit GPUUpSample2DLayer(int scale = 2);
 

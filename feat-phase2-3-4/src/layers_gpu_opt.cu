@@ -1,3 +1,4 @@
+
 #ifdef USE_OPTIMIZED_KERNELS
 
 #include "cuda_utils.h"
@@ -8,10 +9,6 @@
 
 #include <cstdio>
 
-// Declare external kernel from layers_gpu.cu
-extern __global__ void relu_forward_kernel(const float *input, float *output,
-                                           size_t n);
-
 #define TILE_WIDTH 16
 #define TILE_HEIGHT 16
 
@@ -19,6 +16,108 @@ extern __global__ void relu_forward_kernel(const float *input, float *output,
 
 __constant__ float c_weights_small[8192];
 __constant__ float c_bias_small[256];
+
+__global__ void conv2d_bias_relu_fused_kernel(
+    const float *__restrict__ input, const float *__restrict__ weights,
+    const float *__restrict__ bias, float *__restrict__ output, int batch_size,
+    int in_c, int in_h, int in_w, int out_c, int out_h, int out_w, int k,
+    int stride, int padding, bool use_const)
+{
+  const int tile_h = TILE_HEIGHT * stride + k - stride;
+  const int tile_w = TILE_WIDTH * stride + k - stride;
+  const int PAD = 1;
+  extern __shared__ float shared_mem[];
+
+  int ow = blockIdx.x * TILE_WIDTH + threadIdx.x;
+  int oh = blockIdx.y * TILE_HEIGHT + threadIdx.y;
+  int oc = blockIdx.z % out_c;
+  int n = blockIdx.z / out_c;
+
+  if (ow >= out_w || oh >= out_h || n >= batch_size)
+    return;
+
+  // Load bias - use constant memory if available
+  float sum = use_const ? c_bias_small[oc] : bias[oc];
+
+  const int tile_size = tile_h * (tile_w + PAD);
+  const int threads_per_block = blockDim.x * blockDim.y;
+  const int num_loads = (tile_size + threads_per_block - 1) / threads_per_block;
+  const int linear_tid = threadIdx.y * blockDim.x + threadIdx.x;
+
+  float *s_input = shared_mem;
+
+  for (int ic = 0; ic < in_c; ++ic)
+  {
+    const int in_start_h = blockIdx.y * TILE_HEIGHT * stride - padding;
+    const int in_start_w = blockIdx.x * TILE_WIDTH * stride - padding;
+    const size_t in_channel_offset =
+        (static_cast<size_t>(n) * in_c + ic) * in_h * in_w;
+
+#pragma unroll 4
+    for (int load = 0; load < num_loads; ++load)
+    {
+      int linear_idx = load * threads_per_block + linear_tid;
+      if (linear_idx < tile_size)
+      {
+        int sh = linear_idx / (tile_w + PAD);
+        int sw = linear_idx % (tile_w + PAD);
+        int ih = in_start_h + sh;
+        int iw = in_start_w + sw;
+        if (sw < tile_w && ih >= 0 && ih < in_h && iw >= 0 && iw < in_w)
+        {
+          s_input[sh * (tile_w + PAD) + sw] = input[in_channel_offset + ih * in_w + iw];
+        }
+        else
+        {
+          s_input[sh * (tile_w + PAD) + sw] = 0.0f;
+        }
+      }
+    }
+    __syncthreads();
+
+    const int local_h = threadIdx.y * stride;
+    const int local_w = threadIdx.x * stride;
+    const size_t w_ic_offset = (static_cast<size_t>(oc) * in_c + ic) * k * k;
+
+    // Optimized k=3 case with full unrolling and better register usage
+    if (k == 3)
+    {
+      float w[9];
+#pragma unroll
+      for (int kh = 0; kh < 3; ++kh)
+#pragma unroll
+        for (int kw = 0; kw < 3; ++kw)
+          w[kh * 3 + kw] = use_const
+                               ? c_weights_small[w_ic_offset + kh * 3 + kw]
+                               : weights[w_ic_offset + kh * 3 + kw];
+
+#pragma unroll
+      for (int kh = 0; kh < 3; ++kh)
+#pragma unroll
+        for (int kw = 0; kw < 3; ++kw)
+          sum += s_input[(local_h + kh) * (tile_w + PAD) + local_w + kw] * w[kh * 3 + kw];
+    }
+    else
+    {
+      for (int kh = 0; kh < k; ++kh)
+        for (int kw = 0; kw < k; ++kw)
+        {
+          float wval = use_const
+                           ? c_weights_small[w_ic_offset + kh * k + kw]
+                           : weights[w_ic_offset + kh * k + kw];
+          sum += s_input[(local_h + kh) * (tile_w + PAD) + local_w + kw] * wval;
+        }
+    }
+    __syncthreads();
+  }
+
+  // Fused ReLU
+  output[((static_cast<size_t>(n) * out_c + oc) * out_h + oh) * out_w + ow] = fmaxf(0.0f, sum);
+}
+
+// Declare external kernel from layers_gpu.cu
+extern __global__ void relu_forward_kernel(const float *input, float *output,
+                                           size_t n);
 
 __global__ void conv2d_forward_tiled_kernel(
     const float *__restrict__ input, const float *__restrict__ weights,
@@ -257,6 +356,7 @@ __global__ void mse_loss_grad_fused_kernel(const float *__restrict__ output,
 
   float local_loss = 0.0f;
 
+  // Process element and compute gradient simultaneously
   if (idx < n)
   {
     float diff = output[idx] - target[idx];
@@ -267,18 +367,26 @@ __global__ void mse_loss_grad_fused_kernel(const float *__restrict__ output,
   sdata[tid] = local_loss;
   __syncthreads();
 
-  for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1)
+  // Optimized reduction with better synchronization
+  for (unsigned int s = blockDim.x / 2; s > 32; s >>= 1)
   {
     if (tid < s)
-    {
       sdata[tid] += sdata[tid + s];
-    }
     __syncthreads();
   }
 
-  if (tid == 0)
+  // Warp-level reduction without volatile
+  if (tid < 32)
   {
-    partial_loss[blockIdx.x] = sdata[0];
+    float val = sdata[tid];
+    if (blockDim.x >= 64)
+      val += sdata[tid + 32];
+
+    for (int offset = 16; offset > 0; offset >>= 1)
+      val += __shfl_down_sync(0xffffffff, val, offset);
+
+    if (tid == 0)
+      partial_loss[blockIdx.x] = val;
   }
 }
 
@@ -394,13 +502,24 @@ void gpu_conv2d_relu_forward_opt(const GPUTensor4D &input,
     output.allocate(input.n, out_c, out_h, out_w);
   }
 
-  int total = input.n * out_c * out_h * out_w;
-  int block_size = 256;
-  int grid_size = (total + block_size - 1) / block_size;
+  // Optimize: Use constant memory for small weight tensors
+  bool use_const = false;
+  if (out_c <= 256 && in_c * k * k * out_c <= 8192)
+  {
+    CUDA_CHECK(cudaMemcpyToSymbol(c_weights_small, d_weights, in_c * k * k * out_c * sizeof(float)));
+    CUDA_CHECK(cudaMemcpyToSymbol(c_bias_small, d_bias, out_c * sizeof(float)));
+    use_const = true;
+  }
 
-  conv2d_relu_forward_kernel<<<grid_size, block_size>>>(
+  dim3 block(TILE_WIDTH, TILE_HEIGHT);
+  dim3 grid((out_w + TILE_WIDTH - 1) / TILE_WIDTH,
+            (out_h + TILE_HEIGHT - 1) / TILE_HEIGHT, input.n * out_c);
+  int tile_h = TILE_HEIGHT * stride + k - stride;
+  int tile_w = TILE_WIDTH * stride + k - stride;
+  size_t shared_size = tile_h * (tile_w + 1) * sizeof(float);
+  conv2d_bias_relu_fused_kernel<<<grid, block, shared_size>>>(
       input.d_data, d_weights, d_bias, output.d_data, input.n, in_c, input.h,
-      input.w, out_c, out_h, out_w, k, stride, padding);
+      input.w, out_c, out_h, out_w, k, stride, padding, use_const);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -435,7 +554,7 @@ void gpu_conv2d_forward_tiled(const GPUTensor4D &input, const float *d_weights,
 // OPTIMIZED BACKWARD KERNELS
 // ============================================================================
 
-// Optimized conv2d backward data kernel with 2D thread blocks
+// Optimized conv2d backward data kernel with improved memory coalescing
 __global__ void conv2d_backward_data_opt_kernel(
     const float *__restrict__ grad_output, const float *__restrict__ weights,
     float *__restrict__ grad_input, int batch_size, int in_c, int in_h,
@@ -451,33 +570,32 @@ __global__ void conv2d_backward_data_opt_kernel(
     return;
 
   float sum = 0.0f;
+  const size_t gi_idx = ((static_cast<size_t>(n) * in_c + ic) * in_h + ih) * in_w + iw;
+  const size_t go_base = static_cast<size_t>(n) * out_c * out_h * out_w;
 
-  // For 3x3 kernel with stride 1, we can optimize the loop bounds
+  // Optimized for k=3 and stride=1 (most common case)
   if (k == 3 && stride == 1)
   {
-#pragma unroll
     for (int oc = 0; oc < out_c; ++oc)
     {
-      const size_t go_base =
-          (static_cast<size_t>(n) * out_c + oc) * out_h * out_w;
-      const size_t w_base = (static_cast<size_t>(oc) * in_c + ic) * 9;
+      const size_t go_oc_offset = go_base + oc * out_h * out_w;
+      const size_t w_oc_base = (static_cast<size_t>(oc) * in_c + ic) * 9;
 
-#pragma unroll
+      // Optimize memory access: process kernel in order for better L2 cache locality
       for (int kh = 0; kh < 3; ++kh)
       {
         int oh = ih + padding - kh;
         if (oh >= 0 && oh < out_h)
         {
-          const size_t go_row = go_base + oh * out_w;
-          const size_t w_kh = w_base + kh * 3;
+          const size_t go_row = go_oc_offset + oh * out_w;
+          const size_t w_row = w_oc_base + kh * 3;
 
-#pragma unroll
           for (int kw = 0; kw < 3; ++kw)
           {
             int ow = iw + padding - kw;
             if (ow >= 0 && ow < out_w)
             {
-              sum += grad_output[go_row + ow] * weights[w_kh + kw];
+              sum += grad_output[go_row + ow] * weights[w_row + kw];
             }
           }
         }
@@ -486,28 +604,28 @@ __global__ void conv2d_backward_data_opt_kernel(
   }
   else
   {
+    // General case with stride > 1
     for (int oc = 0; oc < out_c; ++oc)
     {
+      const size_t go_oc_offset = go_base + oc * out_h * out_w;
+      const size_t w_oc_base = (static_cast<size_t>(oc) * in_c + ic) * k * k;
+
       for (int kh = 0; kh < k; ++kh)
       {
-        for (int kw = 0; kw < k; ++kw)
+        int oh_check = ih + padding - kh;
+        if ((oh_check % stride == 0) && oh_check >= 0 && oh_check < out_h * stride)
         {
-          int oh_check = ih + padding - kh;
-          int ow_check = iw + padding - kw;
+          int oh = oh_check / stride;
+          const size_t go_row = go_oc_offset + oh * out_w;
+          const size_t w_row = w_oc_base + kh * k;
 
-          if (oh_check % stride == 0 && ow_check % stride == 0)
+          for (int kw = 0; kw < k; ++kw)
           {
-            int oh = oh_check / stride;
-            int ow = ow_check / stride;
-
-            if (oh >= 0 && oh < out_h && ow >= 0 && ow < out_w)
+            int ow_check = iw + padding - kw;
+            if ((ow_check % stride == 0) && ow_check >= 0 && ow_check < out_w * stride)
             {
-              size_t go_idx =
-                  ((static_cast<size_t>(n) * out_c + oc) * out_h + oh) * out_w +
-                  ow;
-              size_t w_idx =
-                  ((static_cast<size_t>(oc) * in_c + ic) * k + kh) * k + kw;
-              sum += grad_output[go_idx] * weights[w_idx];
+              int ow = ow_check / stride;
+              sum += grad_output[go_row + ow] * weights[w_row + kw];
             }
           }
         }
@@ -515,8 +633,6 @@ __global__ void conv2d_backward_data_opt_kernel(
     }
   }
 
-  size_t gi_idx =
-      ((static_cast<size_t>(n) * in_c + ic) * in_h + ih) * in_w + iw;
   grad_input[gi_idx] = sum;
 }
 
@@ -602,7 +718,7 @@ __global__ void conv2d_backward_weights_opt_kernel(
   grad_weights[idx] = sum;
 }
 
-// Optimized bias gradient with parallel reduction
+// Optimized bias gradient with improved parallel reduction and better memory access
 __global__ void
 conv2d_backward_bias_opt_kernel(const float *__restrict__ grad_output,
                                 float *__restrict__ grad_bias, int batch_size,
@@ -613,48 +729,43 @@ conv2d_backward_bias_opt_kernel(const float *__restrict__ grad_output,
   int oc = blockIdx.x;
   int tid = threadIdx.x;
   int total_spatial = batch_size * out_h * out_w;
+  const size_t oc_offset = static_cast<size_t>(oc) * out_h * out_w;
 
+  // Optimized accumulation with better memory access patterns
   float sum = 0.0f;
   for (int i = tid; i < total_spatial; i += blockDim.x)
   {
     int n = i / (out_h * out_w);
     int spatial = i % (out_h * out_w);
-    int oh = spatial / out_w;
-    int ow = spatial % out_w;
-
-    size_t idx =
-        ((static_cast<size_t>(n) * out_c + oc) * out_h + oh) * out_w + ow;
+    // Better layout: all accesses to same oc are sequential in memory
+    size_t idx = ((static_cast<size_t>(n) * out_c + oc) * out_h * out_w) + spatial;
     sum += grad_output[idx];
   }
 
   sdata[tid] = sum;
   __syncthreads();
 
-  // Reduction in shared memory
+  // Tree reduction in shared memory - more efficient
   for (unsigned int s = blockDim.x / 2; s > 32; s >>= 1)
   {
     if (tid < s)
-    {
       sdata[tid] += sdata[tid + s];
-    }
     __syncthreads();
   }
 
-  // Warp-level reduction
+  // Final warp reduction without volatile
   if (tid < 32)
   {
-    volatile float *vsmem = sdata;
-    if (blockDim.x >= 64)
-      vsmem[tid] += vsmem[tid + 32];
-    float val = vsmem[tid];
-    for (int offset = 16; offset > 0; offset /= 2)
-    {
+    float val = sdata[tid];
+    if (blockDim.x >= 64 && tid < 32)
+      val += sdata[tid + 32];
+
+    // Fast warp-level reduction using shfl
+    for (int offset = 16; offset > 0; offset >>= 1)
       val += __shfl_down_sync(0xffffffff, val, offset);
-    }
+
     if (tid == 0)
-    {
       grad_bias[oc] = val;
-    }
   }
 }
 
@@ -744,7 +855,7 @@ __global__ void maxpool2d_backward_opt_kernel(
   }
 }
 
-// Optimized upsample backward with 2D blocks
+// Optimized upsample backward with 2D blocks and coalesced memory access
 __global__ void
 upsample2d_backward_opt_kernel(const float *__restrict__ grad_output,
                                float *__restrict__ grad_input, int batch_size,
@@ -762,30 +873,47 @@ upsample2d_backward_opt_kernel(const float *__restrict__ grad_output,
 
   float sum = 0.0f;
 
-  // Sum all corresponding output gradients
+  // Optimized memory access with better coalescing
   int oh_base = ih * scale;
   int ow_base = iw * scale;
+  const size_t go_n_c_base = (static_cast<size_t>(n) * channels + c) * out_h * out_w;
 
-  const size_t go_base =
-      ((static_cast<size_t>(n) * channels + c) * out_h) * out_w;
-
-#pragma unroll
-  for (int sh = 0; sh < scale; ++sh)
+  // Unroll for common case of scale=2
+  if (scale == 2)
   {
-#pragma unroll
-    for (int sw = 0; sw < scale; ++sw)
+    for (int sh = 0; sh < 2; ++sh)
+    {
+      if (oh_base + sh < out_h)
+      {
+        const size_t go_row = go_n_c_base + (oh_base + sh) * out_w;
+        for (int sw = 0; sw < 2; ++sw)
+        {
+          int ow = ow_base + sw;
+          if (ow < out_w)
+            sum += grad_output[go_row + ow];
+        }
+      }
+    }
+  }
+  else
+  {
+    for (int sh = 0; sh < scale; ++sh)
     {
       int oh = oh_base + sh;
-      int ow = ow_base + sw;
-      if (oh < out_h && ow < out_w)
+      if (oh < out_h)
       {
-        sum += grad_output[go_base + oh * out_w + ow];
+        const size_t go_row = go_n_c_base + oh * out_w;
+        for (int sw = 0; sw < scale; ++sw)
+        {
+          int ow = ow_base + sw;
+          if (ow < out_w)
+            sum += grad_output[go_row + ow];
+        }
       }
     }
   }
 
-  size_t gi_idx =
-      ((static_cast<size_t>(n) * channels + c) * in_h + ih) * in_w + iw;
+  size_t gi_idx = (static_cast<size_t>(n) * channels + c) * in_h * in_w + ih * in_w + iw;
   grad_input[gi_idx] = sum;
 }
 
