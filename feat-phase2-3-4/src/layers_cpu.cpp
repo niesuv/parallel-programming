@@ -50,26 +50,26 @@ Tensor4D Conv2DLayer::forward(const Tensor4D &input) const {
             const float bias_val = bias_[oc];
             const std::size_t out_base = n * out_n_stride + oc * out_c_stride;
             const std::size_t w_oc_base = oc * weight_oc_stride;
-            
+
             for (int oh = 0; oh < out_h; ++oh) {
                 const int ih_base = oh * stride_ - padding_;
                 const std::size_t out_row = out_base + oh * out_w;
-                
+
                 for (int ow = 0; ow < out_w; ++ow) {
                     float sum = bias_val;
                     const int iw_base = ow * stride_ - padding_;
-                    
+
                     for (int ic = 0; ic < in_c_; ++ic) {
                         const std::size_t input_ic_base = n * input_n_stride + ic * input_c_stride;
                         const std::size_t w_ic_base = w_oc_base + ic * weight_ic_stride;
-                        
+
                         for (int kh = 0; kh < k_; ++kh) {
                             const int ih = ih_base + kh;
                             if (ih < 0 || ih >= input_h) continue;
-                            
+
                             const std::size_t input_row = input_ic_base + ih * input_w;
                             const std::size_t w_kh_base = w_ic_base + kh * k_;
-                            
+
                             if (k_ == 3) {
                                 const int iw0 = iw_base, iw1 = iw_base + 1, iw2 = iw_base + 2;
                                 if (iw0 >= 0 && iw0 < input_w) sum += input.data[input_row + iw0] * weights_[w_kh_base];
@@ -143,22 +143,22 @@ Tensor4D MaxPool2DLayer::backward(const Tensor4D &input, const Tensor4D &grad_ou
         for (int c = 0; c < channels; ++c) {
             const std::size_t input_base = n * input_n_stride + c * input_c_stride;
             const std::size_t out_base = n * out_n_stride + c * out_c_stride;
-            
+
             for (int oh = 0; oh < out_h; ++oh) {
                 const int ih_base = oh * stride_;
                 const std::size_t out_row = out_base + oh * out_w;
-                
+
                 for (int ow = 0; ow < out_w; ++ow) {
                     const int iw_base = ow * stride_;
                     float max_val = -std::numeric_limits<float>::infinity();
                     int max_idx = -1;
-                    
+
                     if (k_ == 2) {
                         const std::size_t idx00 = input_base + ih_base * input_w + iw_base;
                         const std::size_t idx01 = idx00 + 1;
                         const std::size_t idx10 = idx00 + input_w;
                         const std::size_t idx11 = idx10 + 1;
-                        
+
                         max_val = input.data[idx00]; max_idx = idx00;
                         if (input.data[idx01] > max_val) { max_val = input.data[idx01]; max_idx = idx01; }
                         if (input.data[idx10] > max_val) { max_val = input.data[idx10]; max_idx = idx10; }
@@ -176,7 +176,7 @@ Tensor4D MaxPool2DLayer::backward(const Tensor4D &input, const Tensor4D &grad_ou
                             }
                         }
                     }
-                    
+
                     if (max_idx >= 0) {
 // #ifdef _OPENMP
 // #pragma omp atomic
@@ -200,14 +200,14 @@ Tensor4D Conv2DLayer::backward(const Tensor4D &input, const Tensor4D &grad_outpu
     const int input_w = input.w;
 
     Tensor4D grad_input(batch_size, in_c_, input_h, input_w);
-    
+
 // #ifdef _OPENMP
 //     const int num_threads = omp_get_max_threads();
 // #else
     const int num_threads = 1;
 // #endif
-    std::vector<std::vector<float>> thread_grad_weights(num_threads, std::vector<float>(weights_.size(), 0.0f));
-    std::vector<std::vector<float>> thread_grad_bias(num_threads, std::vector<float>(out_c_, 0.0f));
+    std::vector<std::vector<float> > thread_grad_weights(num_threads, std::vector<float>(weights_.size(), 0.0f));
+    std::vector<std::vector<float> > thread_grad_bias(num_threads, std::vector<float>(out_c_, 0.0f));
 
     const std::size_t input_c_stride = static_cast<std::size_t>(input_h) * input_w;
     const std::size_t input_n_stride = static_cast<std::size_t>(in_c_) * input_c_stride;
@@ -235,37 +235,37 @@ Tensor4D Conv2DLayer::backward(const Tensor4D &input, const Tensor4D &grad_outpu
             for (int oc = 0; oc < out_c_; ++oc) {
                 const std::size_t go_base = n * out_n_stride + oc * out_c_stride;
                 const std::size_t w_oc_base = oc * weight_oc_stride;
-                
+
                 for (int oh = 0; oh < out_h; ++oh) {
                     const int ih_base = oh * stride_ - padding_;
                     const std::size_t go_row = go_base + oh * out_w;
-                    
+
                     for (int ow = 0; ow < out_w; ++ow) {
                         const float go = grad_output.data[go_row + ow];
                         local_grad_bias[oc] += go;
-                        
+
                         const int iw_base = ow * stride_ - padding_;
-                        
+
                         for (int ic = 0; ic < in_c_; ++ic) {
                             const std::size_t input_ic_base = n * input_n_stride + ic * input_c_stride;
                             const std::size_t w_ic_base = w_oc_base + ic * weight_ic_stride;
-                            
+
                             for (int kh = 0; kh < k_; ++kh) {
                                 const int ih = ih_base + kh;
                                 if (ih < 0 || ih >= input_h) continue;
-                                
+
                                 const std::size_t input_row = input_ic_base + ih * input_w;
                                 const std::size_t w_kh_base = w_ic_base + kh * k_;
-                                
+
                                 for (int kw = 0; kw < k_; ++kw) {
                                     const int iw = iw_base + kw;
                                     if (iw < 0 || iw >= input_w) continue;
-                                    
+
                                     const float val = input.data[input_row + iw];
                                     const std::size_t w_idx = w_kh_base + kw;
-                                    
+
                                     local_grad_weights[w_idx] += go * val;
-                                    
+
 #ifdef _OPENMP
 #pragma omp atomic
 #endif
@@ -281,7 +281,7 @@ Tensor4D Conv2DLayer::backward(const Tensor4D &input, const Tensor4D &grad_outpu
 
     std::vector<float> grad_weights(weights_.size(), 0.0f);
     std::vector<float> grad_bias(out_c_, 0.0f);
-    
+
     for (int t = 0; t < num_threads; ++t) {
         for (std::size_t i = 0; i < weights_.size(); ++i) {
             grad_weights[i] += thread_grad_weights[t][i];
@@ -306,7 +306,7 @@ Tensor4D ReLULayer::forward(const Tensor4D &input) const {
     const std::size_t total = input.data.size();
     const float* __restrict__ in_ptr = input.data.data();
     float* __restrict__ out_ptr = output.data.data();
-    
+
 // #ifdef _OPENMP
 // #pragma omp parallel for simd schedule(static)
 // #endif
@@ -322,7 +322,7 @@ Tensor4D ReLULayer::backward(const Tensor4D &input, const Tensor4D &grad_output)
     const float* __restrict__ in_ptr = input.data.data();
     const float* __restrict__ grad_out_ptr = grad_output.data.data();
     float* __restrict__ grad_in_ptr = grad_input.data.data();
-    
+
 // #ifdef _OPENMP
 // #pragma omp parallel for simd schedule(static)
 // #endif
@@ -357,21 +357,21 @@ Tensor4D MaxPool2DLayer::forward(const Tensor4D &input) const {
         for (int c = 0; c < channels; ++c) {
             const std::size_t input_base = n * input_n_stride + c * input_c_stride;
             const std::size_t out_base = n * out_n_stride + c * out_c_stride;
-            
+
             for (int oh = 0; oh < out_h; ++oh) {
                 const int ih_base = oh * stride_;
                 const std::size_t out_row = out_base + oh * out_w;
-                
+
                 for (int ow = 0; ow < out_w; ++ow) {
                     const int iw_base = ow * stride_;
                     float max_val = -std::numeric_limits<float>::infinity();
-                    
+
                     if (k_ == 2) {
                         const std::size_t idx00 = input_base + ih_base * input_w + iw_base;
                         const std::size_t idx01 = idx00 + 1;
                         const std::size_t idx10 = idx00 + input_w;
                         const std::size_t idx11 = idx10 + 1;
-                        
+
                         max_val = input.data[idx00];
                         if (input.data[idx01] > max_val) max_val = input.data[idx01];
                         if (input.data[idx10] > max_val) max_val = input.data[idx10];
@@ -412,19 +412,17 @@ Tensor4D UpSample2DLayer::forward(const Tensor4D &input) const {
     const std::size_t out_c_stride = static_cast<std::size_t>(out_h) * out_w;
     const std::size_t out_n_stride = static_cast<std::size_t>(channels) * out_c_stride;
 
-// #ifdef _OPENMP
-// #pragma omp parallel for collapse(2) schedule(static)
-// #endif
+
     for (int n = 0; n < batch_size; ++n) {
         for (int c = 0; c < channels; ++c) {
             const std::size_t input_base = n * input_n_stride + c * input_c_stride;
             const std::size_t out_base = n * out_n_stride + c * out_c_stride;
-            
+
             for (int oh = 0; oh < out_h; ++oh) {
                 const int ih = oh / scale_;
                 const std::size_t input_row = input_base + ih * input_w;
                 const std::size_t out_row = out_base + oh * out_w;
-                
+
                 for (int ow = 0; ow < out_w; ++ow) {
                     const int iw = ow / scale_;
                     output.data[out_row + ow] = input.data[input_row + iw];
@@ -458,12 +456,12 @@ Tensor4D UpSample2DLayer::backward(const Tensor4D &input, const Tensor4D &grad_o
         for (int c = 0; c < channels; ++c) {
             const std::size_t input_base = n * input_n_stride + c * input_c_stride;
             const std::size_t out_base = n * out_n_stride + c * out_c_stride;
-            
+
             for (int oh = 0; oh < out_h; ++oh) {
                 const int ih = oh / scale_;
                 const std::size_t input_row = input_base + ih * input_w;
                 const std::size_t out_row = out_base + oh * out_w;
-                
+
                 for (int ow = 0; ow < out_w; ++ow) {
                     const int iw = ow / scale_;
 // #ifdef _OPENMP
@@ -487,7 +485,7 @@ float mse_loss(const Tensor4D &output, const Tensor4D &target) {
     const std::size_t total = output.data.size();
     const float* __restrict__ out_ptr = output.data.data();
     const float* __restrict__ tgt_ptr = target.data.data();
-    
+
     float sum = 0.0f;
 // #ifdef _OPENMP
 // #pragma omp parallel for simd reduction(+:sum) schedule(static)
@@ -514,7 +512,7 @@ float mse_loss_with_grad(const Tensor4D &output, const Tensor4D &target,
     const float* __restrict__ out_ptr = output.data.data();
     const float* __restrict__ tgt_ptr = target.data.data();
     float* __restrict__ grad_ptr = grad_output.data.data();
-    
+
     float sum = 0.0f;
 // #ifdef _OPENMP
 // #pragma omp parallel for simd reduction(+:sum) schedule(static)

@@ -503,13 +503,12 @@ int main(int argc, char **argv) {
     for (int batch_idx = 0; batch_idx < num_batches; ++batch_idx) {
         int buf_idx = batch_idx % n_buffers;
 
+        auto batch_start = std::chrono::high_resolution_clock::now();
         // Wait for this buffer to be available
         if (batch_idx >= n_buffers) {
             cudaStreamSynchronize(streams[buf_idx]);
         }
-
-        auto batch_start = std::chrono::high_resolution_clock::now();
-
+        
         // Prepare data in pinned memory
         for (int b = 0; b < batch_size; ++b) {
             int img_idx = indices[batch_idx * batch_size + b];

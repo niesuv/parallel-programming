@@ -521,7 +521,7 @@ void GPUConv2DLayer::backward_fused_relu(const GPUTensor4D &input,
                                       out_c_, k_, stride_, padding_, stream);
 
     // Conv2D backward weights & bias (không cần ReLU)
-    gpu_conv2d_backward_weights_opt(input, grad_output, d_grad_weights_,
+    gpu_conv2d_relu_backward_weights_opt(input, grad_output, d_grad_weights_,
                                     d_grad_bias_, in_c_, out_c_, k_, stride_,
                                     padding_, stream);
 #else

@@ -718,6 +718,62 @@ __global__ void conv2d_backward_weights_opt_kernel(
   grad_weights[idx] = sum;
 }
 
+__global__ void conv2d_backward_weights_bias_relu_kernel(
+    const float* __restrict__ input,
+    const float* __restrict__ grad_output,
+    float* __restrict__ grad_weights,
+    float* __restrict__ grad_bias,
+    int batch_size, int in_c, int in_h, int in_w,
+    int out_c, int out_h, int out_w,
+    int k, int stride, int padding)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total_weights = out_c * in_c * k * k;
+    if (idx >= total_weights) return;
+
+    int kw = idx % k;
+    int temp = idx / k;
+    int kh = temp % k;
+    temp = temp / k;
+    int ic = temp % in_c;
+    int oc = temp / in_c;
+
+    float sum_w = 0.0f;
+    float sum_b = 0.0f;
+
+    for (int n = 0; n < batch_size; ++n)
+    {
+        const size_t in_n_base = ((size_t)n * in_c + ic) * in_h * in_w;
+        const size_t go_n_base = ((size_t)n * out_c + oc) * out_h * out_w;
+
+        for (int oh = 0; oh < out_h; ++oh)
+        {
+            int ih = oh * stride + kh - padding;
+            if (ih < 0 || ih >= in_h) continue;
+
+            for (int ow = 0; ow < out_w; ++ow)
+            {
+                int iw = ow * stride + kw - padding;
+                if (iw < 0 || iw >= in_w) continue;
+
+                size_t in_idx = in_n_base + ih * in_w + iw;
+                size_t go_idx = go_n_base + oh * out_w + ow;
+
+                // ReLU masking
+                float relu_grad = (input[in_idx] > 0.0f) ? grad_output[go_idx] : 0.0f;
+
+                sum_w += input[in_idx] * relu_grad;
+                sum_b += relu_grad;  // bias gradient
+            }
+        }
+    }
+
+    grad_weights[idx] = sum_w;
+    // Each thread adds to its own bias in global memory (atomic needed if multiple threads per oc)
+    atomicAdd(&grad_bias[oc], sum_b);
+}
+
+
 // Optimized bias gradient with improved parallel reduction and better memory access
 __global__ void
 conv2d_backward_bias_opt_kernel(const float *__restrict__ grad_output,
