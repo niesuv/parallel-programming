@@ -117,13 +117,13 @@ void GPUAutoencoder::train_step(const GPUTensor4D &input,
     // Backward pass
     conv5_.backward(x12_, g13_, g12_, learning_rate, stream);
     up2_.backward(x11_, g12_, g11_, stream);
-    conv4_.backward_fused_relu(x9_, g10_, g9_, learning_rate, stream);
+    conv4_.backward_fused_relu(x9_, g11_, g9_, learning_rate, stream);
     up1_.backward(x8_, g9_, g8_, stream);
-    conv3_.backward_fused_relu(x6_, g7_, g6_, learning_rate, stream);
+    conv3_.backward_fused_relu(x6_, g8_, g6_, learning_rate, stream);
     pool2_.backward(x5_, g6_, g5_, stream);
-    conv2_.backward_fused_relu(x3_, g4_, g3_, learning_rate, stream);
+    conv2_.backward_fused_relu(x3_, g5_, g3_, learning_rate, stream);
     pool1_.backward(x2_, g3_, g2_, stream);
-    conv1_.backward_fused_relu(input, g1_, g0_, learning_rate, stream);
+    conv1_.backward_fused_relu(input, g2_, g0_, learning_rate, stream);
 }
 
 
