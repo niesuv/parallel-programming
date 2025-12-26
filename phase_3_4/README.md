@@ -300,7 +300,7 @@ Tested on NVIDIA T4 GPU:
 |-------------------------|---------|--------------|
 | Autoencoder (20 epochs) | ~17 min | ~950 img/s   |
 | Feature Extraction      | ~7 sec  | ~ 8100 img/s |
-| SVM Training (20 iters) | ~20 min | -            |
+| SVM Training (20 iters) | ~25 min | -            |
 
 
 ## Acknowledgments
