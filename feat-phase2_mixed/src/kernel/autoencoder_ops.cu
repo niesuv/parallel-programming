@@ -269,6 +269,7 @@ upsample2d_forward_fast_kernel(
 // ============================================================================
 // Upsample2D Backward (2x2, nearest neighbor)
 // Sum gradients from 2x2 output region back to input
+// grad_output: [N, H*2, W*2, C], grad_input: [N, H, W, C]
 // ============================================================================
 
 __global__ void __launch_bounds__(256, 4)
@@ -293,16 +294,22 @@ upsample2d_backward_kernel(
     int ih = temp % H;
     int n = temp / H;
     
-    // Output positions (2x2 region)
+    // Corresponding output positions (2x2 region starting at oh, ow)
     int oh = ih * 2;
     int ow = iw * 2;
-    int out_base = n * H_out * W_out * C + oh * W_out * C + ow * C + c;
     
-    // Sum 4 gradients
-    float sum = __half2float(grad_output[out_base]);
-    sum += __half2float(grad_output[out_base + C]);
-    sum += __half2float(grad_output[out_base + W_out * C]);
-    sum += __half2float(grad_output[out_base + W_out * C + C]);
+    // Compute indices explicitly for clarity
+    // grad_output layout: [N, H_out, W_out, C]
+    int idx_00 = n * H_out * W_out * C + (oh)     * W_out * C + (ow)     * C + c;
+    int idx_01 = n * H_out * W_out * C + (oh)     * W_out * C + (ow + 1) * C + c;
+    int idx_10 = n * H_out * W_out * C + (oh + 1) * W_out * C + (ow)     * C + c;
+    int idx_11 = n * H_out * W_out * C + (oh + 1) * W_out * C + (ow + 1) * C + c;
+    
+    // Sum 4 gradients (accumulate in float for precision)
+    float sum = __half2float(grad_output[idx_00]);
+    sum += __half2float(grad_output[idx_01]);
+    sum += __half2float(grad_output[idx_10]);
+    sum += __half2float(grad_output[idx_11]);
     
     grad_input[idx] = __float2half(sum);
 }
@@ -361,18 +368,21 @@ mse_loss_kernel(
     }
 }
 
-// Compute gradient: grad = 2 * (pred - target) / size
+// Compute gradient: grad = 2 * (pred - target) / num_elements_per_sample
+// For proper scaling, we divide by spatial size (H*W*C) but not batch size
 __global__ void __launch_bounds__(256, 4)
 mse_grad_kernel(
     const half* __restrict__ pred,
     const half* __restrict__ target,
     half* __restrict__ grad,
-    int size)
+    int size,
+    int elements_per_sample)  // H * W * C
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int idx2 = idx * 2;
     
-    float scale = 2.0f / (float)size;
+    // Scale: 2 / (H*W*C) - standard MSE gradient per sample
+    float scale = 2.0f / (float)elements_per_sample;
     
     if (idx2 + 1 < size) {
         half2 p = *reinterpret_cast<const half2*>(&pred[idx2]);
@@ -397,14 +407,16 @@ mse_loss_grad_fused_kernel(
     const half* __restrict__ target,
     half* __restrict__ grad,
     float* __restrict__ partial_loss,  // Per-block partial sum
-    int size)
+    int size,
+    int elements_per_sample)  // Full batch size for gradient scaling
 {
     __shared__ float s_sum[8];
     
     int tid = threadIdx.x;
     int idx = blockIdx.x * blockDim.x + tid;
     
-    float scale = 2.0f / (float)size;
+    // Gradient scale: 2 / total_elements
+    float grad_scale = 2.0f / (float)elements_per_sample;
     float local_sum = 0.0f;
     
     // Process elements
@@ -414,7 +426,7 @@ mse_loss_grad_fused_kernel(
         float diff = p - t;
         
         // Gradient
-        grad[idx] = __float2half(diff * scale);
+        grad[idx] = __float2half(diff * grad_scale);
         
         // Loss contribution
         local_sum = diff * diff;
@@ -467,6 +479,90 @@ __global__ void reduce_loss_kernel(
             *loss = sum / (float)size;  // Mean
         }
     }
+}
+
+// ============================================================================
+// SGD Weight Update
+// master_weight (fp32) -= lr * grad_weight (fp32)
+// weight (fp16) = (half)master_weight
+// Also handles bias update
+// Note: Basic sgd_update_weight_kernel and sgd_update_bias_kernel are in backward_v8.cu
+// Here we only define the vectorized version (which is unique to this file)
+// ============================================================================
+
+static __global__ void __launch_bounds__(256, 4)
+sgd_update_weight_vec4_kernel(
+    float* __restrict__ master_weight,
+    half* __restrict__ weight,
+    const float* __restrict__ grad,
+    float lr,
+    int size)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int idx4 = idx * 4;
+    
+    if (idx4 + 3 >= size) {
+        // Handle tail
+        for (int i = idx4; i < size; i++) {
+            float w = master_weight[i];
+            w -= lr * grad[i];
+            master_weight[i] = w;
+            weight[i] = __float2half(w);
+        }
+        return;
+    }
+    
+    // Load 4 weights and grads
+    float4 w = *reinterpret_cast<float4*>(&master_weight[idx4]);
+    float4 g = *reinterpret_cast<const float4*>(&grad[idx4]);
+    
+    // Update
+    w.x -= lr * g.x;
+    w.y -= lr * g.y;
+    w.z -= lr * g.z;
+    w.w -= lr * g.w;
+    
+    // Store master
+    *reinterpret_cast<float4*>(&master_weight[idx4]) = w;
+    
+    // Store fp16
+    half2 h01 = __halves2half2(__float2half(w.x), __float2half(w.y));
+    half2 h23 = __halves2half2(__float2half(w.z), __float2half(w.w));
+    *reinterpret_cast<half2*>(&weight[idx4]) = h01;
+    *reinterpret_cast<half2*>(&weight[idx4 + 2]) = h23;
+}
+
+// Simple SGD kernels (local versions to avoid linker conflicts)
+static __global__ void __launch_bounds__(256, 4)
+sgd_weight_kernel_local(
+    float* __restrict__ master_weight,
+    half* __restrict__ weight,
+    const float* __restrict__ grad,
+    float lr,
+    int size)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= size) return;
+    float w = master_weight[idx];
+    w -= lr * grad[idx];
+    master_weight[idx] = w;
+    weight[idx] = __float2half(w);
+}
+
+static __global__ void __launch_bounds__(256, 4)
+sgd_bias_kernel_local(
+    float* __restrict__ master_bias,
+    half* __restrict__ bias,
+    const float* __restrict__ grad,
+    float lr,
+    int size)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= size) return;
+    float b = master_bias[idx];
+    b -= lr * grad[idx];
+    master_bias[idx] = b;
+    bias[idx] = __float2half(b);
 }
 
 // ============================================================================
@@ -557,6 +653,7 @@ void launch_upsample2d_backward(
 }
 
 // MSE Loss (returns loss value, writes gradient)
+// elements_per_sample = N * H * W * C (full batch for gradient scaling)
 void launch_mse_loss_grad(
     const half* pred,
     const half* target,
@@ -564,6 +661,7 @@ void launch_mse_loss_grad(
     float* loss,
     float* partial_buffer,  // Temporary buffer of size num_blocks
     int size,
+    int elements_per_sample,
     cudaStream_t stream)
 {
     int block = 256;
@@ -571,7 +669,7 @@ void launch_mse_loss_grad(
     
     // Fused loss + grad computation
     mse_loss_grad_fused_kernel<<<grid, block, 0, stream>>>(
-        pred, target, grad, partial_buffer, size);
+        pred, target, grad, partial_buffer, size, elements_per_sample);
     
     // Reduce partial losses
     reduce_loss_kernel<<<1, 256, 0, stream>>>(
@@ -603,13 +701,70 @@ void launch_mse_grad(
     const half* target,
     half* grad,
     int size,
+    int elements_per_sample,
     cudaStream_t stream)
 {
     int block = 256;
     int grid = ((size + 1) / 2 + block - 1) / block;
     
     mse_grad_kernel<<<grid, block, 0, stream>>>(
-        pred, target, grad, size);
+        pred, target, grad, size, elements_per_sample);
+}
+
+// SGD Weight Update (Conv2D weights)
+// Updates master_weight (fp32) and weight (fp16) in place
+void launch_sgd_update_weight(
+    float* master_weight,
+    half* weight,
+    const float* grad,
+    float lr,
+    int size,
+    cudaStream_t stream)
+{
+    if (size >= 16 && size % 4 == 0) {
+        // Vectorized version
+        int block = 256;
+        int grid = ((size / 4) + block - 1) / block;
+        sgd_update_weight_vec4_kernel<<<grid, block, 0, stream>>>(
+            master_weight, weight, grad, lr, size);
+    } else {
+        int block = 256;
+        int grid = (size + block - 1) / block;
+        sgd_weight_kernel_local<<<grid, block, 0, stream>>>(
+            master_weight, weight, grad, lr, size);
+    }
+}
+
+// SGD Bias Update
+void launch_sgd_update_bias(
+    float* master_bias,
+    half* bias,
+    const float* grad,
+    float lr,
+    int size,
+    cudaStream_t stream)
+{
+    int block = 256;
+    int grid = (size + block - 1) / block;
+    sgd_bias_kernel_local<<<grid, block, 0, stream>>>(
+        master_bias, bias, grad, lr, size);
+}
+
+// Combined: update both weight and bias for a Conv2D layer
+void launch_sgd_update_conv2d(
+    float* master_weight,
+    half* weight,
+    const float* grad_weight,
+    float* master_bias,
+    half* bias,
+    const float* grad_bias,
+    float lr,
+    int weight_size,  // K * 3 * 3 * C
+    int bias_size,    // K
+    cudaStream_t stream)
+{
+    launch_sgd_update_weight(master_weight, weight, grad_weight, lr, weight_size, stream);
+    launch_sgd_update_bias(master_bias, bias, grad_bias, lr, bias_size, stream);
 }
 
 }  // extern "C"

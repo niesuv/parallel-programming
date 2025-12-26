@@ -474,7 +474,9 @@ conv2d_backward_bias_kernel(
     if (tid < 8) {
         sum = s_sum[tid];
         sum = warp_reduce_sum(sum);
-        if (tid == 0) grad_bias[k] = sum;
+        if (tid == 0) {
+            grad_bias[k] = sum;
+        }
     }
 }
 
@@ -667,6 +669,7 @@ sgd_update_weight_kernel(
     
     float w = master_weight[idx];
     float g = grad[idx];
+    
     w -= lr * g;
     master_weight[idx] = w;
     weight[idx] = __float2half(w);
@@ -685,6 +688,7 @@ sgd_update_bias_kernel(
     
     float b = master_bias[idx];
     float g = grad[idx];
+    
     b -= lr * g;
     master_bias[idx] = b;
     bias[idx] = __float2half(b);
