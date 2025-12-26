@@ -240,12 +240,12 @@ echo '  Stage 2: Extracting Features'
 echo '=============================================='
 \"$SCRIPT_DIR/extract_features\" --data \"$DATA_DIR\" --weights \"$AE_WEIGHTS\" --output \"$FEATURES_PREFIX\"
 
-# Stage 3: Train SVM
+# Stage 3: Train Classifier
 echo ''
 echo '=============================================='
-echo '  Stage 3: Training SVM Classifier'
+echo '  Stage 3: Training Classifier'
 echo '=============================================='
-python3 \"$SCRIPT_DIR/train_svm.py\" --features \"$FEATURES_PREFIX\" --epochs $EPOCHS_SVM --kernel linear --save_model \"$SVM_MODEL\"
+python3 \"$SCRIPT_DIR/train_svm.py\" --features \"$FEATURES_PREFIX\" --epochs $EPOCHS_SVM --classifier gpu --save_model \"$SVM_MODEL\"
 
 echo ''
 echo '=============================================='
