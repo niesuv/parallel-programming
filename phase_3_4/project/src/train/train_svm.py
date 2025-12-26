@@ -6,7 +6,7 @@ Train classifier on extracted autoencoder features using GPU (cuML) or CPU (skle
 Dataset Organization:
   - Training: 50,000 samples with extracted features (8192-dim) + labels
   - Evaluation: 10,000 test samples with extracted features + labels
-
+  
 The features were extracted by the autoencoder's encoder from CIFAR-10 images.
 Classifier learns to classify these latent representations into 10 classes.
 
@@ -40,10 +40,10 @@ def load_features(prefix):
     y_train = load_bin(f"{prefix}_train_labels.bin", is_features=False)
     X_test = load_bin(f"{prefix}_test_features.bin", is_features=True)
     y_test = load_bin(f"{prefix}_test_labels.bin", is_features=False)
-
+    
     print(f"  Train: {X_train.shape[0]} samples, {X_train.shape[1]} features")
     print(f"  Test:  {X_test.shape[0]} samples, {X_test.shape[1]} features")
-
+    
     return X_train, y_train, X_test, y_test
 
 
@@ -52,37 +52,37 @@ def normalize_features(X_train, X_test):
     # Compute min/max from training set only
     X_min = X_train.min(axis=0, keepdims=True)
     X_max = X_train.max(axis=0, keepdims=True)
-
+    
     # Avoid division by zero
     X_range = X_max - X_min
     X_range[X_range == 0] = 1.0
-
+    
     X_train_norm = (X_train - X_min) / X_range
     X_test_norm = (X_test - X_min) / X_range
-
+    
     # Clip test set to [0, 1] in case of out-of-range values
     X_test_norm = np.clip(X_test_norm, 0, 1)
-
+    
     return X_train_norm, X_test_norm
 
 
 def train_sgd_classifier(X_train, y_train, X_test, y_test, epochs=20):
     """Train SGDClassifier - very fast linear classifier with SGD optimization."""
     from sklearn.linear_model import SGDClassifier
-
+    
     print("\nUsing SGDClassifier (CPU) - Fast linear classifier")
     print("=" * 60)
-
+    
     best_acc = 0.0
     best_model = None
-
+    
     # Different alpha (regularization) values
     alpha_values = np.logspace(-6, -1, epochs)
-
+    
     for epoch in range(epochs):
         alpha = alpha_values[epoch]
         start_time = time.time()
-
+        
         clf = SGDClassifier(
             loss='hinge',  # Linear SVM
             alpha=alpha,
@@ -92,46 +92,46 @@ def train_sgd_classifier(X_train, y_train, X_test, y_test, epochs=20):
             n_jobs=-1
         )
         clf.fit(X_train, y_train)
-
+        
         train_acc = clf.score(X_train, y_train)
         test_acc = clf.score(X_test, y_test)
-
+        
         elapsed = time.time() - start_time
-
+        
         if test_acc > best_acc:
             best_acc = test_acc
             best_model = clf
             best_marker = " [BEST]"
         else:
             best_marker = ""
-
+        
         print(f"Epoch {epoch+1:2d}/{epochs}: alpha={alpha:.2e} | "
               f"Train: {train_acc*100:5.2f}% | Test: {test_acc*100:5.2f}% | "
               f"Time: {elapsed:.2f}s{best_marker}")
-
+    
     print("=" * 60)
     print(f"Best Test Accuracy: {best_acc*100:.2f}%")
-
+    
     return best_acc, best_model
 
 
 def train_logistic_regression(X_train, y_train, X_test, y_test, epochs=20):
     """Train Logistic Regression - fast and effective for high-dim data."""
     from sklearn.linear_model import LogisticRegression
-
+    
     print("\nUsing Logistic Regression (CPU) - Fast multiclass classifier")
     print("=" * 60)
-
+    
     best_acc = 0.0
     best_model = None
-
+    
     # Different C (inverse regularization) values
     C_values = np.logspace(-3, 2, epochs)
-
+    
     for epoch in range(epochs):
         C = C_values[epoch]
         start_time = time.time()
-
+        
         clf = LogisticRegression(
             C=C,
             solver='lbfgs',
@@ -141,12 +141,12 @@ def train_logistic_regression(X_train, y_train, X_test, y_test, epochs=20):
             random_state=42
         )
         clf.fit(X_train, y_train)
-
+        
         train_acc = clf.score(X_train, y_train)
         test_acc = clf.score(X_test, y_test)
-
+        
         elapsed = time.time() - start_time
-
+        
         if test_acc > best_acc:
             best_acc = test_acc
             best_model = clf
@@ -157,10 +157,10 @@ def train_logistic_regression(X_train, y_train, X_test, y_test, epochs=20):
         print(f"Epoch {epoch+1:2d}/{epochs}: C={C:8.4f} | "
               f"Train: {train_acc*100:5.2f}% | Test: {test_acc*100:5.2f}% | "
               f"Time: {elapsed:.2f}s{best_marker}")
-
+    
     print("=" * 60)
     print(f"Best Test Accuracy: {best_acc*100:.2f}%")
-
+    
     return best_acc, best_model
 
 
@@ -271,23 +271,23 @@ def train_mlp_classifier(X_train, y_train, X_test, y_test, epochs=20):
 
 
 def train_gpu_classifier(X_train, y_train, X_test, y_test, epochs=20):
-    """Train using cuML GPU-accelerated classifiers."""
+    """Train using cuML GPU-accelerated Linear SVM."""
     try:
         import cupy as cp
-        from cuml.linear_model import LogisticRegression as cuLogisticRegression
+        from cuml.svm import LinearSVC as cuLinearSVC
         from cuml.metrics import accuracy_score
-        print("\nUsing cuML Logistic Regression (GPU)")
+        print("\nUsing cuML LinearSVC (GPU) - Fast Linear SVM")
     except ImportError:
-        print("cuML not available, falling back to CPU Logistic Regression")
-        return train_logistic_regression(X_train, y_train, X_test, y_test, epochs)
+        print("cuML not available, falling back to CPU LinearSVC")
+        return train_linear_svm_fast(X_train, y_train, X_test, y_test, epochs)
     
     print("=" * 60)
     
     # Convert to GPU arrays
     X_train_gpu = cp.asarray(X_train, dtype=cp.float32)
-    y_train_gpu = cp.asarray(y_train, dtype=cp.int32)
+    y_train_gpu = cp.asarray(y_train, dtype=cp.float32)
     X_test_gpu = cp.asarray(X_test, dtype=cp.float32)
-    y_test_gpu = cp.asarray(y_test, dtype=cp.int32)
+    y_test_gpu = cp.asarray(y_test, dtype=cp.float32)
     
     best_acc = 0.0
     best_model = None
@@ -298,9 +298,9 @@ def train_gpu_classifier(X_train, y_train, X_test, y_test, epochs=20):
         C = C_values[epoch]
         start_time = time.time()
         
-        clf = cuLogisticRegression(
+        clf = cuLinearSVC(
             C=C,
-            max_iter=500,
+            max_iter=2000,
             tol=1e-4
         )
         clf.fit(X_train_gpu, y_train_gpu)
