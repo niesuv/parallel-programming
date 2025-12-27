@@ -274,7 +274,7 @@ def train_gpu_classifier(X_train, y_train, X_test, y_test, epochs=20):
     """Train using cuML GPU-accelerated SVM."""
     try:
         import cupy as cp
-        from cuml.svm import SVC as cuSVC
+        from cuml.svm import LinearSVC as cuLinearSVC
         from cuml.metrics import accuracy_score
         import warnings
         warnings.filterwarnings('ignore')
@@ -300,9 +300,8 @@ def train_gpu_classifier(X_train, y_train, X_test, y_test, epochs=20):
         C = C_values[epoch]
         start_time = time.time()
 
-        clf = cuSVC(
+        clf = cuLinearSVC(
             C=C,
-            kernel='linear',
             max_iter=1000,
             tol=1e-3,
             verbose=False
