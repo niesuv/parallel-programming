@@ -161,6 +161,26 @@ set_target_properties(extract_features PROPERTIES
 )
 
 # ============================================================================
+# Naive Implementations (for comparison)
+# ============================================================================
+
+set(NAIVE_DIR ${CMAKE_SOURCE_DIR}/src/naive)
+
+# Naive GPU Autoencoder
+add_executable(naive_gpu_autoencoder ${NAIVE_DIR}/naive_gpu_autoencoder.cu)
+set_target_properties(naive_gpu_autoencoder PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+
+# Naive CPU Autoencoder (C++ only, no CUDA)
+add_executable(naive_cpu_autoencoder ${NAIVE_DIR}/naive_cpu_autoencoder.cpp)
+set_target_properties(naive_cpu_autoencoder PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+target_link_libraries(naive_cpu_autoencoder m)
+
+# ============================================================================
 # Python Script Setup (train_svm.py)
 # ============================================================================
 
@@ -245,7 +265,7 @@ echo ''
 echo '=============================================='
 echo '  Stage 3: Training Classifier'
 echo '=============================================='
-python3 \"$SCRIPT_DIR/train_svm.py\" --features \"$FEATURES_PREFIX\" --epochs $EPOCHS_SVM --classifier gpu --save_model \"$SVM_MODEL\"
+python3 \"$SCRIPT_DIR/train_svm.py\" --features \"$FEATURES_PREFIX\" --epochs $EPOCHS_SVM --classifier sgd --save_model \"$SVM_MODEL\"
 
 echo ''
 echo '=============================================='
@@ -276,9 +296,19 @@ add_custom_target(all_stages
 # Convenience Targets
 # ============================================================================
 
-# Build all executables
+# Build all executables (optimized)
 add_custom_target(build_all
     DEPENDS train_autoencoder extract_features train_svm
+)
+
+# Build naive implementations
+add_custom_target(build_naive
+    DEPENDS naive_gpu_autoencoder naive_cpu_autoencoder
+)
+
+# Build everything
+add_custom_target(build_everything
+    DEPENDS train_autoencoder extract_features train_svm naive_gpu_autoencoder naive_cpu_autoencoder
 )
 
 # Clean data files
@@ -355,17 +385,26 @@ message(STATUS "  src/kernel/           ${KERNEL_DIR}")
 message(STATUS "  src/layer/            ${LAYER_DIR}")
 message(STATUS "  src/train/            ${TRAIN_DIR}")
 message(STATUS "  src/inference/        ${INFERENCE_DIR}")
+message(STATUS "  src/naive/            ${NAIVE_DIR}")
 message(STATUS "")
 message(STATUS "CUDA Architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "")
-message(STATUS "Targets:")
-message(STATUS "  train_autoencoder - Train the autoencoder")
-message(STATUS "  extract_features  - Extract latent features")
-message(STATUS "  train_svm         - Setup SVM training script")
-message(STATUS "  all_stages        - Run complete pipeline")
-message(STATUS "  build_all         - Build all executables")
-message(STATUS "  download_data     - Download CIFAR-10 dataset")
-message(STATUS "  clean_data        - Remove generated files")
+message(STATUS "Targets (Optimized):")
+message(STATUS "  train_autoencoder     - Train the autoencoder (FP16 + Tensor Cores)")
+message(STATUS "  extract_features      - Extract latent features")
+message(STATUS "  train_svm             - Setup SVM training script")
+message(STATUS "  all_stages            - Run complete pipeline")
+message(STATUS "  build_all             - Build optimized executables")
+message(STATUS "")
+message(STATUS "Targets (Naive - for comparison):")
+message(STATUS "  naive_gpu_autoencoder - Simple GPU implementation")
+message(STATUS "  naive_cpu_autoencoder - Pure C++ CPU implementation")
+message(STATUS "  build_naive           - Build naive executables")
+message(STATUS "")
+message(STATUS "Utility Targets:")
+message(STATUS "  download_data         - Download CIFAR-10 dataset")
+message(STATUS "  clean_data            - Remove generated files")
+message(STATUS "  build_everything      - Build all targets")
 message(STATUS "============================================")
 message(STATUS "")

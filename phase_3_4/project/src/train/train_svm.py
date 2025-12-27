@@ -271,37 +271,41 @@ def train_mlp_classifier(X_train, y_train, X_test, y_test, epochs=20):
 
 
 def train_gpu_classifier(X_train, y_train, X_test, y_test, epochs=20):
-    """Train using cuML GPU-accelerated Linear SVM."""
+    """Train using cuML GPU-accelerated Logistic Regression (faster than LinearSVC)."""
     try:
         import cupy as cp
-        from cuml.svm import LinearSVC as cuLinearSVC
+        from cuml.linear_model import LogisticRegression as cuLogisticRegression
         from cuml.metrics import accuracy_score
-        print("\nUsing cuML LinearSVC (GPU) - Fast Linear SVM")
+        import warnings
+        warnings.filterwarnings('ignore')
+        print("\nUsing cuML Logistic Regression (GPU) - Fast classifier")
     except ImportError:
-        print("cuML not available, falling back to CPU LinearSVC")
-        return train_linear_svm_fast(X_train, y_train, X_test, y_test, epochs)
+        print("cuML not available, falling back to CPU SGD")
+        return train_sgd_classifier(X_train, y_train, X_test, y_test, epochs)
     
     print("=" * 60)
     
     # Convert to GPU arrays
     X_train_gpu = cp.asarray(X_train, dtype=cp.float32)
-    y_train_gpu = cp.asarray(y_train, dtype=cp.float32)
+    y_train_gpu = cp.asarray(y_train, dtype=cp.int32)
     X_test_gpu = cp.asarray(X_test, dtype=cp.float32)
-    y_test_gpu = cp.asarray(y_test, dtype=cp.float32)
+    y_test_gpu = cp.asarray(y_test, dtype=cp.int32)
     
     best_acc = 0.0
     best_model = None
     
-    C_values = np.logspace(-3, 2, epochs)
+    C_values = np.logspace(-2, 1, epochs)
     
     for epoch in range(epochs):
         C = C_values[epoch]
         start_time = time.time()
         
-        clf = cuLinearSVC(
+        clf = cuLogisticRegression(
             C=C,
-            max_iter=2000,
-            tol=1e-4
+            max_iter=200,
+            tol=1e-3,
+            solver='qn',  # Quasi-Newton, faster
+            verbose=0
         )
         clf.fit(X_train_gpu, y_train_gpu)
         
@@ -339,9 +343,9 @@ def main():
                         help='Prefix for feature files')
     parser.add_argument('--epochs', type=int, default=20,
                         help='Number of hyperparameter iterations')
-    parser.add_argument('--classifier', type=str, default='gpu', 
+    parser.add_argument('--classifier', type=str, default='sgd', 
                         choices=['sgd', 'logistic', 'linearsvm', 'mlp', 'gpu'],
-                        help='Classifier type (default: gpu - fastest with cuML)')
+                        help='Classifier type (default: sgd - fastest)')
     parser.add_argument('--save_model', type=str, default='',
                         help='Path to save best model (pickle format)')
     args = parser.parse_args()

@@ -47,7 +47,7 @@ project/
 ├── include/
 │   └── autoencoder.h          # Autoencoder class declaration
 ├── src/
-│   ├── kernel/                # CUDA kernels
+│   ├── kernel/                # Optimized CUDA kernels
 │   │   ├── gpu_conv2d_fp16_forward_v6.cu
 │   │   ├── gpu_conv2d_fp16_backward_v8.cu
 │   │   └── autoencoder_ops.cu
@@ -56,8 +56,17 @@ project/
 │   ├── train/
 │   │   ├── train_AE.cu        # Autoencoder training
 │   │   └── train_svm.py       # SVM training (Python)
-│   └── inference/
-│       └── extract_features.cu # Feature extraction
+│   ├── inference/
+│   │   └── extract_features.cu # Feature extraction
+│   └── naive/                 # Naive implementations (for comparison)
+│       ├── naive_gpu_autoencoder.cu   # Simple GPU version
+│       └── naive_cpu_autoencoder.cpp  # Pure C++ CPU version
+├── test/
+│   └── test_conv2d_v6.cu      # Kernel tests and benchmarks
+├── docs/
+│   ├── FORWARD_KERNEL_OPTIMIZATIONS.md
+│   ├── BACKWARD_KERNEL_OPTIMIZATIONS.md
+│   └── REPORT_SECTIONS_4_5.md
 ├── data/                      # CIFAR-10 dataset (after download)
 ├── weights/                   # Saved model weights
 └── features/                  # Extracted features
@@ -202,6 +211,57 @@ cmake .. -DCMAKE_CUDA_ARCHITECTURES=89   # RTX 4090
 | `cifar10_train_labels.bin` | features/ | Training labels (50K) |
 | `cifar10_test_features.bin` | features/ | Test features (10K × 8192) |
 | `cifar10_test_labels.bin` | features/ | Test labels (10K) |
+
+## Naive Implementations (For Comparison)
+
+The `src/naive/` folder contains simple, unoptimized implementations for performance comparison and educational purposes.
+
+### Naive GPU Version
+
+Simple CUDA kernels without Tensor Cores, shared memory tiling, or other optimizations.
+
+```bash
+# Build (standalone)
+nvcc -arch=sm_75 -O2 -o naive_gpu_autoencoder src/naive/naive_gpu_autoencoder.cu
+
+# Or with CMake
+make naive_gpu_autoencoder
+
+# Run
+./bin/naive_gpu_autoencoder --data data --epochs 10 --lr 0.001 --batch 64
+```
+
+### Naive CPU Version
+
+Pure C++ implementation without any GPU acceleration.
+
+```bash
+# Build (standalone)
+g++ -O2 -o naive_cpu_autoencoder src/naive/naive_cpu_autoencoder.cpp -lm
+
+# Or with CMake
+make naive_cpu_autoencoder
+
+# Run
+./bin/naive_cpu_autoencoder --data data --epochs 5 --lr 0.001 --batch 16
+```
+
+### Arguments for Naive Versions
+
+| Argument | Default (GPU) | Default (CPU) | Description |
+|----------|---------------|---------------|-------------|
+| `--batch` | 64 | 16 | Batch size |
+| `--lr` | 0.001 | 0.001 | Learning rate |
+| `--epochs` | 10 | 5 | Number of epochs |
+| `--data` | data | data | Data directory |
+
+### Performance Comparison
+
+| Version | Throughput | Speedup |
+|---------|------------|---------|
+| Naive CPU | ~1-2 img/s | 1× (baseline) |
+| Naive GPU | ~10-50 img/s | ~20× |
+| **Optimized GPU (FP16 + Tensor Cores)** | **~950 img/s** | **~500×** |
 
 ## Training Details
 
