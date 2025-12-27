@@ -7,10 +7,8 @@
 #include <cuda_fp16.h>
 #include <cstdio>
 
-// ============================================================================
-// Device Utilities
-// ============================================================================
 
+// Device Utilities
 __device__ __forceinline__ half relu_bwd(half g, half x) {
     return __hgt(x, __float2half(0.0f)) ? g : __float2half(0.0f);
 }
@@ -21,10 +19,8 @@ __device__ __forceinline__ float warp_reduce_sum(float val) {
     return val;
 }
 
-// ============================================================================
-// ReLU Backward
-// ============================================================================
 
+// ReLU Backward
 __global__ void __launch_bounds__(256, 4)
 relu_backward_kernel(
     const half* __restrict__ grad_out,
@@ -47,11 +43,9 @@ relu_backward_kernel(
     }
 }
 
-// ============================================================================
+
 // Backward Input - Simple and fast
 // Each thread handles 4 consecutive channels at one spatial position
-// ============================================================================
-
 __global__ void __launch_bounds__(256, 3)
 conv2d_backward_input_kernel(
     const half* __restrict__ grad_out,
@@ -109,12 +103,10 @@ conv2d_backward_input_kernel(
     if (c_base + 3 < C) grad_in[out_base + 3] = __float2half(sum3);
 }
 
-// ============================================================================
+
 // Backward Weight - LARGE TILE version for K >= 64, C >= 64
 // Uses 64x64 output tile with 16 elements per thread
 // OPTIMIZATION: half in shared memory, float for compute
-// ============================================================================
-
 __global__ void __launch_bounds__(256, 2)
 conv2d_backward_weight_large_kernel(
     const half* __restrict__ grad_out,
@@ -232,12 +224,9 @@ conv2d_backward_weight_large_kernel(
     }
 }
 
-// ============================================================================
+
 // Backward Weight - MEDIUM TILE version for K >= 32, C >= 32
 // Uses 32x32 output tile with 4 elements per thread
-// OPTIMIZATION: half in shared memory, float for compute
-// ============================================================================
-
 __global__ void __launch_bounds__(256, 2)
 conv2d_backward_weight_medium_kernel(
     const half* __restrict__ grad_out,
@@ -351,10 +340,7 @@ conv2d_backward_weight_medium_kernel(
     if (v3) grad_weight[(k_base + k3) * 9 * C + kh * 3 * C + kw * C + c_base + c3] = acc3;
 }
 
-// ============================================================================
 // Backward Weight - SMALL TILE version for small K or C
-// ============================================================================
-
 __global__ void __launch_bounds__(256, 2)
 conv2d_backward_weight_small_kernel(
     const half* __restrict__ grad_out,
@@ -442,10 +428,8 @@ conv2d_backward_weight_small_kernel(
     }
 }
 
-// ============================================================================
-// Bias Gradient
-// ============================================================================
 
+// Bias Gradient
 __global__ void __launch_bounds__(256, 4)
 conv2d_backward_bias_kernel(
     const half* __restrict__ grad_out,
@@ -480,10 +464,7 @@ conv2d_backward_bias_kernel(
     }
 }
 
-// ============================================================================
 // Fused ReLU + Backward Input
-// ============================================================================
-
 __global__ void __launch_bounds__(256, 4)
 fused_relu_precompute_kernel(
     const half* __restrict__ upstream,
@@ -566,10 +547,8 @@ fused_relu_backward_input_kernel(
     if (c_base + 3 < C) grad_in[out_base + 3] = __float2half(sum3);
 }
 
-// ============================================================================
-// Launch Functions
-// ============================================================================
 
+// Launch Functions
 extern "C" {
 
 void launch_relu_backward_opt(
@@ -652,10 +631,7 @@ void launch_conv2d_backward_weight_opt(
         grad_output, grad_bias, N, H_out, W_out, K);
 }
 
-// ============================================================================
 // SGD Update Kernels (for fused backward + SGD)
-// ============================================================================
-
 __global__ void __launch_bounds__(256, 4)
 sgd_update_weight_kernel(
     float* __restrict__ master_weight,
@@ -694,11 +670,8 @@ sgd_update_bias_kernel(
     bias[idx] = __float2half(b);
 }
 
-// ============================================================================
 // Fused Backward Weight + SGD Update
 // Computes gradients AND applies SGD in one call
-// ============================================================================
-
 void launch_conv2d_backward_weight_sgd(
     const half* grad_output,
     const half* input,

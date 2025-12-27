@@ -9,9 +9,8 @@
 
 using namespace nvcuda::wmma;
 
-// ============================================================================
+
 // CONFIGURATION - PROPERLY TUNED FOR T4 (48KB shared memory limit)
-// ============================================================================
 constexpr int WMMA_M = 16;
 constexpr int WMMA_N = 16;
 constexpr int WMMA_K = 16;
@@ -32,9 +31,7 @@ constexpr int SMEM_PAD = 8;
 constexpr int INPUT_TILE_H = TILE_H + 2;  // 10
 constexpr int INPUT_TILE_W = TILE_W + 2;  // 10
 
-// ============================================================================
 // V6 OPTIMIZED KERNEL - Fits T4 shared memory, optimized memory layout
-// ============================================================================
 __global__ void __launch_bounds__(THREADS_PER_BLOCK, 4)
 conv2d_fp16_wmma_v6_kernel(
     const half* __restrict__ input,
@@ -202,9 +199,7 @@ conv2d_fp16_wmma_v6_kernel(
     }
 }
 
-// ============================================================================
 // CONV + RELU FUSED KERNEL
-// ============================================================================
 __global__ void __launch_bounds__(THREADS_PER_BLOCK, 4)
 conv2d_relu_fp16_wmma_v6_kernel(
     const half* __restrict__ input,
@@ -376,9 +371,8 @@ conv2d_relu_fp16_wmma_v6_kernel(
     }
 }
 
-// ============================================================================
-// REFERENCE KERNEL (simple, correct)
-// ============================================================================
+
+// REFERENCE KERNEL (simple, correct) This kernel for testing correctness
 __global__ void conv2d_fp16_reference_kernel(
     const half* __restrict__ input,
     const half* __restrict__ weight,

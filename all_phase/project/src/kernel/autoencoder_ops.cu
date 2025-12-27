@@ -8,11 +8,9 @@
 #include <cfloat>
 #include <cstdio>
 
-// ============================================================================
 // MaxPool2D Forward (2x2, stride=2)
 // Input: [N, H, W, C] -> Output: [N, H/2, W/2, C]
 // Also outputs max indices for backward pass
-// ============================================================================
 
 __global__ void __launch_bounds__(256, 4)
 maxpool2d_forward_kernel(
@@ -133,11 +131,9 @@ maxpool2d_forward_vec_kernel(
     max_indices[out_idx + 1] = idx_hi;
 }
 
-// ============================================================================
+
 // MaxPool2D Backward (2x2, stride=2)
 // Gradient flows only to the max position
-// ============================================================================
-
 __global__ void __launch_bounds__(256, 4)
 maxpool2d_backward_kernel(
     const half* __restrict__ grad_output,  // [N, H/2, W/2, C]
@@ -193,11 +189,9 @@ zero_kernel(half* data, int size)
     }
 }
 
-// ============================================================================
+
 // Upsample2D Forward (2x2, nearest neighbor)
 // Input: [N, H, W, C] -> Output: [N, H*2, W*2, C]
-// ============================================================================
-
 __global__ void __launch_bounds__(256, 4)
 upsample2d_forward_kernel(
     const half* __restrict__ input,   // [N, H, W, C]
@@ -266,12 +260,10 @@ upsample2d_forward_fast_kernel(
     output[out_base + W_out * C + C] = val;      // (oh+1, ow+1)
 }
 
-// ============================================================================
+
 // Upsample2D Backward (2x2, nearest neighbor)
 // Sum gradients from 2x2 output region back to input
 // grad_output: [N, H*2, W*2, C], grad_input: [N, H, W, C]
-// ============================================================================
-
 __global__ void __launch_bounds__(256, 4)
 upsample2d_backward_kernel(
     const half* __restrict__ grad_output,  // [N, H*2, W*2, C]
@@ -314,12 +306,10 @@ upsample2d_backward_kernel(
     grad_input[idx] = __float2half(sum);
 }
 
-// ============================================================================
+
 // MSE Loss Forward + Backward (Fused)
 // Loss = mean((pred - target)^2)
 // Grad = 2 * (pred - target) / num_elements
-// ============================================================================
-
 __device__ __forceinline__ float warp_reduce_sum(float val) {
     for (int offset = 16; offset > 0; offset >>= 1)
         val += __shfl_down_sync(0xffffffff, val, offset);
@@ -481,15 +471,13 @@ __global__ void reduce_loss_kernel(
     }
 }
 
-// ============================================================================
+
 // SGD Weight Update
 // master_weight (fp32) -= lr * grad_weight (fp32)
 // weight (fp16) = (half)master_weight
 // Also handles bias update
 // Note: Basic sgd_update_weight_kernel and sgd_update_bias_kernel are in backward_v8.cu
 // Here we only define the vectorized version (which is unique to this file)
-// ============================================================================
-
 static __global__ void __launch_bounds__(256, 4)
 sgd_update_weight_vec4_kernel(
     float* __restrict__ master_weight,

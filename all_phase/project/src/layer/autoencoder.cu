@@ -9,10 +9,8 @@
 #include <cmath>
 #include <vector>
 
-// ============================================================================
-// External kernel declarations
-// ============================================================================
 
+// External kernel declarations
 // Forward Conv2D (from gpu_conv2d_fp16_forward_v6.cu)
 extern "C" {
 void launch_conv2d_fp16_wmma_optimized(
@@ -90,10 +88,7 @@ __global__ void zero_fp16(half* data, int size) {
     }
 }
 
-// ============================================================================
 // Constructor / Destructor
-// ============================================================================
-
 Autoencoder::Autoencoder(int batch, float lr, const std::string& weights_path)
     : batch_size(batch), learning_rate(lr) {
     cudaStreamCreate(&stream);
@@ -114,10 +109,8 @@ Autoencoder::~Autoencoder() {
     free_layers();
 }
 
-// ============================================================================
-// Layer Allocation
-// ============================================================================
 
+// Layer Allocation
 void Autoencoder::allocate_layers() {
     int N = batch_size;
     
@@ -313,15 +306,11 @@ void Autoencoder::init_weights() {
     cudaStreamSynchronize(stream);
 }
 
-// ============================================================================
 // Forward Pass
-// ============================================================================
-
 void Autoencoder::forward() {
     int N = batch_size;
-    
-    // ========== ENCODER ==========
-    
+
+    // ENCODER
     // Save input for backward
     cudaMemcpyAsync(conv1.input_saved, input, N * 32 * 32 * 3 * sizeof(half),
                     cudaMemcpyDeviceToDevice, stream);
@@ -357,8 +346,7 @@ void Autoencoder::forward() {
         pool2.output, conv3.weight, conv3.bias, conv3.output, conv3.conv_output,
         N, 8, 8, 128, 128, stream);
     
-    // ========== DECODER ==========
-    
+    //DECODER
     // Up1: (N, 8, 8, 128) -> (N, 16, 16, 128)
     launch_upsample2d_forward(conv3.output, up1.output, N, 8, 8, 128, stream);
     
@@ -388,10 +376,7 @@ void Autoencoder::forward() {
                     cudaMemcpyDeviceToDevice, stream);
 }
 
-// ============================================================================
 // Encode Only (get latent features)
-// ============================================================================
-
 half* Autoencoder::encode(bool save_features) {
     int N = batch_size;
     
@@ -433,10 +418,8 @@ half* Autoencoder::encode(bool save_features) {
     return nullptr;  // Latent stays on GPU
 }
 
-// ============================================================================
-// Backward Pass
-// ============================================================================
 
+// Backward Pass (Already have weight updates)
 float Autoencoder::backward() {
     int N = batch_size;
     int output_size = N * 32 * 32 * 3;
@@ -522,10 +505,8 @@ float Autoencoder::backward() {
     return h_loss;
 }
 
-// ============================================================================
-// Weight I/O
-// ============================================================================
 
+// Weight I/O
 void Autoencoder::save_weights(const std::string& filename) {
     FILE* f = fopen(filename.c_str(), "wb");
     if (!f) {

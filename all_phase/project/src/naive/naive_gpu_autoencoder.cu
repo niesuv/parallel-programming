@@ -18,9 +18,7 @@
 #include <string>
 #include <cstring>
 
-// ============================================================================
 // CUDA Error Check
-// ============================================================================
 #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
     if (err != cudaSuccess) { \
@@ -30,11 +28,10 @@
     } \
 } while(0)
 
-// ============================================================================
-// Naive Kernels - Simple as possible
-// ============================================================================
 
-// ----- Conv2D Forward (3x3, stride=1, padding=1) -----
+// Naive Kernels - Simple as possible
+
+// Conv2D Forward (3x3, stride=1, padding=1) 
 __global__ void naive_conv2d_forward(
     const float* input,   // [N, H, W, C]
     const float* weight,  // [K, 3, 3, C]
@@ -73,7 +70,7 @@ __global__ void naive_conv2d_forward(
     output[idx] = sum + bias[k];
 }
 
-// ----- Conv2D Backward Input -----
+//  Conv2D Backward Input 
 __global__ void naive_conv2d_backward_input(
     const float* grad_output,  // [N, H, W, K]
     const float* weight,       // [K, 3, 3, C]
@@ -110,7 +107,7 @@ __global__ void naive_conv2d_backward_input(
     grad_input[idx] = sum;
 }
 
-// ----- Conv2D Backward Weight -----
+//  Conv2D Backward Weight 
 __global__ void naive_conv2d_backward_weight(
     const float* input,        // [N, H, W, C]
     const float* grad_output,  // [N, H, W, K]
@@ -146,7 +143,7 @@ __global__ void naive_conv2d_backward_weight(
     grad_weight[idx] = sum;
 }
 
-// ----- Conv2D Backward Bias -----
+//  Conv2D Backward Bias 
 __global__ void naive_conv2d_backward_bias(
     const float* grad_output,  // [N, H, W, K]
     float* grad_bias,          // [K]
@@ -167,7 +164,7 @@ __global__ void naive_conv2d_backward_bias(
     grad_bias[k] = sum;
 }
 
-// ----- ReLU Forward -----
+//  ReLU Forward 
 __global__ void naive_relu_forward(
     const float* input,
     float* output,
@@ -179,7 +176,7 @@ __global__ void naive_relu_forward(
     output[idx] = fmaxf(input[idx], 0.0f);
 }
 
-// ----- ReLU Backward -----
+//  ReLU Backward 
 __global__ void naive_relu_backward(
     const float* grad_output,
     const float* input,
@@ -192,7 +189,7 @@ __global__ void naive_relu_backward(
     grad_input[idx] = input[idx] > 0.0f ? grad_output[idx] : 0.0f;
 }
 
-// ----- MaxPool2D Forward (2x2, stride=2) -----
+//  MaxPool2D Forward (2x2, stride=2) 
 __global__ void naive_maxpool_forward(
     const float* input,   // [N, H, W, C]
     float* output,        // [N, H/2, W/2, C]
@@ -231,7 +228,7 @@ __global__ void naive_maxpool_forward(
     indices[idx] = max_idx;
 }
 
-// ----- MaxPool2D Backward -----
+//  MaxPool2D Backward 
 __global__ void naive_maxpool_backward(
     const float* grad_output,  // [N, H/2, W/2, C]
     const int* indices,        // [N, H/2, W/2, C]
@@ -248,7 +245,7 @@ __global__ void naive_maxpool_backward(
     atomicAdd(&grad_input[max_idx], grad_output[idx]);
 }
 
-// ----- Upsample2D Forward (2x, nearest neighbor) -----
+//  Upsample2D Forward (2x, nearest neighbor) 
 __global__ void naive_upsample_forward(
     const float* input,   // [N, H, W, C]
     float* output,        // [N, H*2, W*2, C]
@@ -272,7 +269,7 @@ __global__ void naive_upsample_forward(
     output[idx] = input[in_idx];
 }
 
-// ----- Upsample2D Backward -----
+//  Upsample2D Backward 
 __global__ void naive_upsample_backward(
     const float* grad_output,  // [N, H*2, W*2, C]
     float* grad_input,         // [N, H, W, C]
@@ -303,7 +300,7 @@ __global__ void naive_upsample_backward(
     grad_input[idx] = sum;
 }
 
-// ----- MSE Loss Forward -----
+//  MSE Loss Forward 
 __global__ void naive_mse_forward(
     const float* pred,
     const float* target,
@@ -335,7 +332,7 @@ __global__ void naive_mse_forward(
     }
 }
 
-// ----- MSE Loss Backward -----
+//  MSE Loss Backward 
 __global__ void naive_mse_backward(
     const float* pred,
     const float* target,
@@ -348,7 +345,7 @@ __global__ void naive_mse_backward(
     grad[idx] = 2.0f * (pred[idx] - target[idx]) / size;
 }
 
-// ----- SGD Update -----
+//  SGD Update 
 __global__ void naive_sgd_update(
     float* weight,
     const float* grad,
@@ -361,7 +358,7 @@ __global__ void naive_sgd_update(
     weight[idx] -= lr * grad[idx];
 }
 
-// ----- Zero Tensor -----
+//  Zero Tensor 
 __global__ void naive_zero(float* data, int size) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= size) return;

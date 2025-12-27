@@ -18,10 +18,8 @@
 #include <chrono>
 #include <algorithm>
 
-// ============================================================================
-// Tensor Class - Simple dynamic array
-// ============================================================================
 
+// Tensor Class - Simple dynamic array
 class Tensor {
 public:
     std::vector<float> data;
@@ -60,11 +58,9 @@ public:
     const float* ptr() const { return data.data(); }
 };
 
-// ============================================================================
-// Naive Operations - Simple loops
-// ============================================================================
 
-// ----- Conv2D Forward (3x3, stride=1, padding=1) -----
+// Naive Operations - Simple loops
+// Conv2D Forward (3x3, stride=1, padding=1)
 void naive_conv2d_forward(
     const Tensor& input,   // [N, H, W, C]
     const Tensor& weight,  // [K, 3, 3, C]
@@ -101,7 +97,7 @@ void naive_conv2d_forward(
     }
 }
 
-// ----- Conv2D Backward Input -----
+// Conv2D Backward Input
 void naive_conv2d_backward_input(
     const Tensor& grad_output,  // [N, H, W, K]
     const Tensor& weight,       // [K, 3, 3, C]
@@ -139,7 +135,7 @@ void naive_conv2d_backward_input(
     }
 }
 
-// ----- Conv2D Backward Weight -----
+// Conv2D Backward Weight
 void naive_conv2d_backward_weight(
     const Tensor& input,        // [N, H, W, C]
     const Tensor& grad_output,  // [N, H, W, K]
@@ -177,7 +173,7 @@ void naive_conv2d_backward_weight(
     }
 }
 
-// ----- Conv2D Backward Bias -----
+// Conv2D Backward Bias
 void naive_conv2d_backward_bias(
     const Tensor& grad_output,  // [N, H, W, K]
     Tensor& grad_bias,          // [K]
@@ -198,21 +194,21 @@ void naive_conv2d_backward_bias(
     }
 }
 
-// ----- ReLU Forward -----
+// ReLU Forward
 void naive_relu_forward(const Tensor& input, Tensor& output) {
     for (int i = 0; i < input.size; i++) {
         output[i] = std::max(0.0f, input[i]);
     }
 }
 
-// ----- ReLU Backward -----
+//  ReLU Backward
 void naive_relu_backward(const Tensor& grad_output, const Tensor& input, Tensor& grad_input) {
     for (int i = 0; i < input.size; i++) {
         grad_input[i] = input[i] > 0.0f ? grad_output[i] : 0.0f;
     }
 }
 
-// ----- MaxPool2D Forward (2x2, stride=2) -----
+//  MaxPool2D Forward (2x2, stride=2)
 void naive_maxpool_forward(
     const Tensor& input,   // [N, H, W, C]
     Tensor& output,        // [N, H/2, W/2, C]
@@ -251,7 +247,7 @@ void naive_maxpool_forward(
     }
 }
 
-// ----- MaxPool2D Backward -----
+//  MaxPool2D Backward
 void naive_maxpool_backward(
     const Tensor& grad_output,
     const std::vector<int>& indices,
@@ -268,7 +264,7 @@ void naive_maxpool_backward(
     }
 }
 
-// ----- Upsample2D Forward (2x, nearest neighbor) -----
+// Upsample2D Forward (2x, nearest neighbor)
 void naive_upsample_forward(
     const Tensor& input,   // [N, H, W, C]
     Tensor& output,        // [N, H*2, W*2, C]
@@ -293,7 +289,7 @@ void naive_upsample_forward(
     }
 }
 
-// ----- Upsample2D Backward -----
+//  Upsample2D Backward
 void naive_upsample_backward(
     const Tensor& grad_output,  // [N, H*2, W*2, C]
     Tensor& grad_input,         // [N, H, W, C]
@@ -325,7 +321,7 @@ void naive_upsample_backward(
     }
 }
 
-// ----- MSE Loss -----
+// MSE Loss
 float naive_mse_loss(const Tensor& pred, const Tensor& target) {
     float sum = 0.0f;
     for (int i = 0; i < pred.size; i++) {
@@ -335,24 +331,22 @@ float naive_mse_loss(const Tensor& pred, const Tensor& target) {
     return sum / pred.size;
 }
 
-// ----- MSE Loss Backward -----
+// MSE Loss Backward
 void naive_mse_backward(const Tensor& pred, const Tensor& target, Tensor& grad) {
     for (int i = 0; i < pred.size; i++) {
         grad[i] = 2.0f * (pred[i] - target[i]) / pred.size;
     }
 }
 
-// ----- SGD Update -----
+// SGD Update
 void naive_sgd_update(Tensor& weight, const Tensor& grad, float lr) {
     for (int i = 0; i < weight.size; i++) {
         weight[i] -= lr * grad[i];
     }
 }
 
-// ============================================================================
-// Naive CPU Autoencoder Class
-// ============================================================================
 
+// Naive CPU Autoencoder Class
 class NaiveCPUAutoencoder {
 public:
     int batch_size;
@@ -531,10 +525,7 @@ public:
     }
 };
 
-// ============================================================================
-// CIFAR-10 Data Loader
-// ============================================================================
-
+// CIFAR-10 Data Loader _ Copy paste
 class CIFAR10Loader {
 public:
     std::vector<float> images;
@@ -593,10 +584,6 @@ public:
         current_idx = rand() % num_samples;
     }
 };
-
-// ============================================================================
-// Main
-// ============================================================================
 
 int main(int argc, char** argv) {
     printf("=== Naive CPU Autoencoder Training ===\n\n");

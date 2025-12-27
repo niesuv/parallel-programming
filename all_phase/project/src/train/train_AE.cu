@@ -17,10 +17,8 @@
 #include <algorithm>
 #include <random>
 
-// ============================================================================
-// CIFAR-10 Data Loading (Images only, labels ignored for autoencoder)
-// ============================================================================
 
+// CIFAR-10 Data Loading (Images only, labels ignored for autoencoder)
 struct CIFAR10Dataset {
     std::vector<uint8_t> images;  // [N, 32, 32, 3] in HWC format
     std::vector<uint8_t> labels;  // [N] - loaded but NOT used for training
@@ -90,9 +88,9 @@ struct CIFAR10Dataset {
     }
 };
 
-// ============================================================================
+
 // Main Training Loop
-// ============================================================================
+
 
 int main(int argc, char** argv) {
     printf("=== CIFAR-10 Autoencoder Training ===\n\n");

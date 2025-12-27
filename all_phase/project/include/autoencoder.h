@@ -5,10 +5,7 @@
 #include <cuda_fp16.h>
 #include <string>
 
-// ============================================================================
 // Layer Structures
-// ============================================================================
-
 struct Conv2DLayer {
     int C_in, C_out, H, W;
     half* weight;
@@ -76,19 +73,13 @@ public:
     
     cudaStream_t stream;
     
-    // ========================================================================
     // Constructors / Destructor
-    // ========================================================================
-    
     // Create new model (optionally load weights)
     Autoencoder(int batch, float lr = 0.01f, const std::string& weights_path = "");
     
     ~Autoencoder();
     
-    // ========================================================================
     // Core Methods
-    // ========================================================================
-    
     // Forward pass (full autoencoder)
     void forward();
     
@@ -100,20 +91,14 @@ public:
     // If save_features=false, returns nullptr (latent stays on GPU in this->latent)
     half* encode(bool save_features = false);
     
-    // ========================================================================
     // Weight I/O
-    // ========================================================================
-    
     // Save weights to binary file
     void save_weights(const std::string& filename);
     
     // Load weights from binary file
     bool load_weights(const std::string& filename);
-    
-    // ========================================================================
+
     // Utility
-    // ========================================================================
-    
     // Get latent size per sample
     int latent_size() const { return 8 * 8 * 128; }
     
