@@ -265,7 +265,7 @@ echo ''
 echo '=============================================='
 echo '  Stage 3: Training Classifier'
 echo '=============================================='
-python3 \"$SCRIPT_DIR/train_svm.py\" --features \"$FEATURES_PREFIX\" --epochs $EPOCHS_SVM --classifier sgd --save_model \"$SVM_MODEL\"
+python3 \"$SCRIPT_DIR/train_svm.py\" --features \"$FEATURES_PREFIX\" --epochs $EPOCHS_SVM --classifier gpu --save_model \"$SVM_MODEL\"
 
 echo ''
 echo '=============================================='
