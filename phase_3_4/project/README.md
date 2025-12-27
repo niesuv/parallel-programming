@@ -330,7 +330,7 @@ Final Best Test Accuracy: 48.90%
 ```
 
 ## Troubleshooting
-
+All kind of craps that we have faced
 ### CUDA Out of Memory
 - Reduce batch size: `--batch 32`
 - Use smaller GPU architecture
@@ -356,11 +356,11 @@ mv cifar-10-batches-bin/* .
 
 Tested on NVIDIA T4 GPU:
 
-| Stage | Time | Throughput |
-|-------|------|------------|
-| Autoencoder (30 epochs) | ~26 min | ~950 img/s |
+| Stage | Time    | Throughput |
+|-------|---------|------------|
+| Autoencoder (30 epochs) | ~17 min | ~950 img/s |
 | Feature Extraction | ~30 sec | ~2000 img/s |
-| SVM Training (20 iters) | ~2 min | - |
+| SVM Training (20 iters) | ~40 min | - |
 
 ## License
 
