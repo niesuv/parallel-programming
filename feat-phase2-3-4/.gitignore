@@ -1,8 +1,0 @@
-weights/
-.env
-*.ipynb
-*.bin
-run_cpu_train_workers.py
-*.csv
-*.exe
-*.txt
